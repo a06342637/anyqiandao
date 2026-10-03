@@ -21,6 +21,8 @@ class Auth:
         self.hash_slots = asyncio.Semaphore(2)
 
     def origin(self, request):
+        if request.headers.get('sec-fetch-site') == 'cross-site':
+            raise HTTPException(403, '请求来源不匹配')
         origin = request.headers.get('origin')
         if origin and origin.rstrip('/') != self.config.public_url:
             raise HTTPException(403, '请求来源不匹配')
@@ -52,13 +54,21 @@ class Auth:
         self.store.execute('INSERT INTO sessions VALUES (?,?)', (hashlib.sha256(token.encode()).hexdigest(), time.time() + 86400))
         return token
 
-    def require(self, request: Request):
+    def session(self, request: Request):
         token = request.cookies.get(COOKIE_NAME, '')
+        if not token or len(token) > 128:
+            return None
         session = self.store.one('SELECT expires FROM sessions WHERE token_hash=?', (hashlib.sha256(token.encode()).hexdigest(),))
         if not session or session['expires'] <= time.time():
+            return None
+        return token
+
+    def require(self, request: Request):
+        token = self.session(request)
+        if not token:
             raise HTTPException(401, '请先登录管理页面')
+        self.origin(request)
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
-            self.origin(request)
             if not hmac.compare_digest(request.headers.get('x-csrf-token', ''), self.csrf(token)):
                 raise HTTPException(403, '安全校验失败，请刷新页面后重试')
         return token

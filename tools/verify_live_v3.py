@@ -22,17 +22,17 @@ report = {}
 with httpx.Client(base_url=values.get('访问地址', 'https://signin.example.com'), timeout=45, trust_env=False) as client:
     health = client.get('/healthz')
     health.raise_for_status()
-    assert health.json()['version'] == (ROOT / 'VERSION').read_text().strip() and health.json()['schema_version'] == SCHEMA_VERSION
-    branding = client.get('/api/v1/branding')
-    branding.raise_for_status()
-    assert set(branding.json()) == {'site_name', 'site_icon_text'}
+    assert health.json() == {'status': 'ok'}
+    assert client.get('/api/v1/branding').status_code == 401
     favicon = client.get('/favicon.svg')
     favicon.raise_for_status()
     assert 'image/svg+xml' in favicon.headers['content-type']
     response = client.post('/api/v1/auth/login', json={'username': values.get('管理员账号', 'admin'), 'password': values['管理员密码']})
     response.raise_for_status()
     client.headers['X-CSRF-Token'] = response.json()['csrf_token']
-    report['health'] = health.json()
+    report['health'] = client.get('/healthz').json()
+    branding = client.get('/api/v1/branding')
+    branding.raise_for_status()
     accounts = client.get('/api/v1/accounts?limit=5').json()
     assert accounts['total'] >= 3 and all('last_balance' in item for item in accounts['items'])
     report['accounts'] = accounts['total']
@@ -72,9 +72,12 @@ with httpx.Client(base_url=values.get('访问地址', 'https://signin.example.co
         time.sleep(2)
     assert updates['updater_available'], 'Updater heartbeat unavailable'
     report['updates'] = {'available': updates['updater_available'], 'source_configured': bool(updates['repository'])}
-    backup = client.post('/api/v1/backup')
+    import secrets
+    from app.backup_encryption import decrypt_bytes
+    backup_password = secrets.token_urlsafe(24)
+    backup = client.post('/api/v1/backup', json={'passphrase': backup_password})
     backup.raise_for_status()
-    document = backup.json()
+    document = json.loads(decrypt_bytes(backup.content, backup_password))
     assert len(document['accounts']) == accounts['total'] and document['schema_version'] == SCHEMA_VERSION
     assert all('balance_source' in item for item in document['checkins'])
     assert document['settings']['site_name'] == branding.json()['site_name']

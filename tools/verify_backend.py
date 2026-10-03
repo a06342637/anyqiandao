@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import httpx
 from argon2 import PasswordHasher
 
+from tools.backup_fixture import PASSWORD as BACKUP_PASSWORD, HEADERS as BACKUP_HEADERS
+from app.backup_encryption import decrypt_bytes
 from app.config import Config
 from app.crypto import Vault
 from app.db import Store
@@ -235,13 +237,13 @@ async def verify():
             check((await client.get('/api/v1/stats?range=year')).status_code == 400, 'unknown statistics range rejected')
             schedules_page = (await client.get('/api/v1/schedules?limit=1')).json()
             check(schedules_page['total'] >= 2 and len(schedules_page['items']) == 1 and schedules_page['items'][0]['id'] == auto_id, 'schedule pagination puts the default plan first')
-            archive = await client.post('/api/v1/backup')
+            archive = await client.post('/api/v1/backup', json={'passphrase': BACKUP_PASSWORD})
             check(archive.status_code == 200 and 'attachment' in archive.headers['content-disposition'], 'one-click backup downloads a JSON archive')
-            document = archive.json()
+            document = json.loads(decrypt_bytes(archive.content, BACKUP_PASSWORD))
             check(document['app'] == 'any-signin-assistant' and len(document['accounts']) == store.one('SELECT COUNT(*) AS c FROM accounts')['c'] and next(a for a in document['accounts'] if a['username'] == 'fixture_1')['password'] == account_password and next(a for a in document['accounts'] if a['username'] == 'fixture_2_renamed')['password'] == 'new-secret-2' and document['checkins'], 'backup contains accounts with passwords, credentials, schedules and check-in history')
             await client.post('/api/v1/accounts/delete', json={'ids': [identifiers[4]]})
             before_restore = store.one('SELECT COUNT(*) AS c FROM accounts')['c']
-            restored = await client.post('/api/v1/backup/restore', content=archive.content, headers={'Content-Type': 'application/json'})
+            restored = await client.post('/api/v1/backup/restore', content=archive.content, headers=BACKUP_HEADERS)
             check(restored.status_code == 200 and restored.json()['accounts_added'] == 1 and store.one('SELECT COUNT(*) AS c FROM accounts')['c'] == before_restore + 1, 'restore re-creates the deleted account and merges the rest')
             revived = next(row for row in store.all('SELECT id,login_enc FROM accounts') if store.vault.open(row['login_enc'], f'login:{row["id"]}')['username'] == 'fixture_4')
             check(store.account(revived['id'])['result']['session'] == 'synthetic-cookie-fixture_4' and store.stored_password(revived['id']) == account_password, 'restored account keeps its password and credential')

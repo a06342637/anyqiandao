@@ -13,15 +13,21 @@ import zlib
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import Field
 
 from app.backup_schema import BackupDocument
 from app.checkin_state import DailyCheckinState, merge_daily_state, valid_observation
 from app.config import VERSION
 from app.db import SCHEMA_VERSION
-from app.schemas import RuntimeSettings
+from app.schemas import RuntimeSettings, StrictModel
+from app.backup_encryption import MAGIC, encrypt_bytes, decrypt_bytes, password_header
 
 FORMAT = 1
 RESTORE_LIMIT = 64 * 1024 * 1024
+
+
+class BackupExportInput(StrictModel):
+    passphrase: str = Field(min_length=12, max_length=1024)
 
 
 def backup_document(store):
@@ -62,14 +68,17 @@ def backup_router(store, auth):
     router = APIRouter(prefix='/api/v1', dependencies=[Depends(auth.require)])
 
     @router.post('/backup')
-    def backup():
+    def backup(payload: BackupExportInput):
         document = backup_document(store)
         accounts, schedules, proxies, checkins = (document[key] for key in ('accounts', 'schedules', 'proxies', 'checkins'))
         body = json.dumps(document, ensure_ascii=False, separators=(',', ':')).encode()
+        if len(body) > RESTORE_LIMIT - 64:
+            raise HTTPException(413, '备份数据超过 64MB，请使用服务器备份脚本')
+        body = encrypt_bytes(body, payload.passphrase)
         store.log('backup', f'已生成备份：{len(accounts)} 个账号、{len(schedules)} 个计划、{len(proxies)} 个代理、{len(checkins)} 条签到记录')
         stamp = time.strftime('%Y%m%d-%H%M%S')
-        return StreamingResponse(iter([body]), media_type='application/json',
-                                 headers={'Content-Disposition': f'attachment; filename="any-signin-backup-{stamp}.json"', 'Cache-Control': 'no-store',
+        return StreamingResponse(iter([body]), media_type='application/octet-stream',
+                                 headers={'Content-Disposition': f'attachment; filename="any-signin-backup-{stamp}.asb"', 'Cache-Control': 'no-store',
                                           'X-Backup-Accounts': str(len(accounts))})
 
     @router.post('/backup/restore')
@@ -77,6 +86,12 @@ def backup_router(store, auth):
         raw = await request.body()
         if len(raw) > RESTORE_LIMIT:
             raise HTTPException(413, '备份文件超过 64MB')
+        if raw.startswith(MAGIC):
+            import asyncio
+            try:
+                raw = await asyncio.to_thread(decrypt_bytes, raw, password_header(request.headers.get('x-backup-password', '')))
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from None
         try:
             if raw.startswith(b'PK'):
                 with zipfile.ZipFile(io.BytesIO(raw)) as archive:

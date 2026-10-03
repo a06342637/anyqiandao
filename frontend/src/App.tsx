@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowRight, CalendarClock, ChevronRight, Gauge, KeyRound, Layers3, ListChecks, ListOrdered, LogOut, Moon, Settings2, ShieldCheck, Sun, Users, X } from 'lucide-react';
 import { api, formatTime, newId, refreshData, setCsrfToken, useResource } from './api';
 import { BrandingContext, Button, ConfirmProvider, DEFAULT_BRANDING, ErrorNotice, SealMark, ToastContext, TrackContext, kindLabel, type TrackOptions } from './ui';
@@ -36,7 +36,7 @@ export default function App() {
   const [toasts, setToasts] = useState<{ message: string; kind: string; id: string; created: number }[]>([]);
   const trackers = useRef(new Map<string, { ids: string[]; options: TrackOptions; started: number }>());
   const [initialError, setInitialError] = useState('');
-  const { data: branding } = useResource<SiteBranding>('/branding', 0);
+  const { data: branding } = useResource<SiteBranding>(authenticated ? '/branding' : null, 0);
   const site = branding || DEFAULT_BRANDING;
   const { data: dashboard, error: dashboardError, reload } = useResource<Dashboard>(authenticated ? '/dashboard' : null);
   const timezone = dashboard?.timezone || 'Asia/Seoul';
@@ -55,11 +55,16 @@ export default function App() {
   useEffect(() => {
     let active = true;
     void api<{ csrf_token: string }>('/auth/me').then(result => { if (active) { setCsrfToken(result.csrf_token); setAuthenticated(true); } }).catch(error => {
-      if (active) { setAuthenticated(false); if (error.status !== 401) setInitialError('暂时无法连接服务，请检查网络后重试'); }
+      if (active) { setAuthenticated(false); if (error.status === 401) window.location.replace('/login'); if (error.status !== 401) setInitialError('暂时无法连接服务，请检查网络后重试'); }
     });
-    const expired = () => { setCsrfToken(''); setAuthenticated(false); setSettingsOpen(false); trackers.current.clear(); setToasts([]); };
+    const expired = () => { setCsrfToken(''); setAuthenticated(false); setSettingsOpen(false); trackers.current.clear(); setToasts([]); window.location.replace('/login'); };
+    const channel = new BroadcastChannel('any-session');
+    channel.onmessage = expired;
+    const hide = () => { document.documentElement.style.visibility = 'hidden'; };
+    const show = (event: PageTransitionEvent) => { if (event.persisted) window.location.reload(); };
+    window.addEventListener('pagehide', hide); window.addEventListener('pageshow', show);
     window.addEventListener('any-auth-expired', expired);
-    return () => { active = false; window.removeEventListener('any-auth-expired', expired); };
+    return () => { active = false; channel.close(); window.removeEventListener('any-auth-expired', expired); window.removeEventListener('pagehide', hide); window.removeEventListener('pageshow', show); };
   }, []);
   useEffect(() => { const timer = window.setInterval(() => setToasts(previous => previous.length ? previous.filter(item => item.kind === 'progress' || Date.now() - item.created < 8500) : previous), 1000); return () => clearInterval(timer); }, []);
   const notify = useCallback((message: string, kind = 'info') => setToasts(previous => [...previous, { message, kind, id: newId(), created: Date.now() }].slice(-4)), []);
@@ -126,7 +131,7 @@ export default function App() {
   const toggleTheme = () => { const next = theme === 'light' ? 'dark' : 'light'; setTheme(next); try { localStorage.setItem('any-theme', next); } catch {} };
   const openLogs = (jobId: string) => { setLogJob(jobId); setLogAccount(''); setPage('logs'); };
   const clearLogFilter = () => { setLogJob(''); setLogAccount(''); };
-  const logout = async () => { try { await api('/auth/logout', 'POST'); setAuthenticated(false); setCsrfToken(''); trackers.current.clear(); setToasts([]); } catch (error) { notify((error as Error).message, 'error'); } };
+  const logout = async () => { try { await api('/auth/logout', 'POST'); setAuthenticated(false); setSettingsOpen(false); setCsrfToken(''); trackers.current.clear(); setToasts([]); const channel = new BroadcastChannel('any-session'); channel.postMessage('logout'); channel.close(); window.location.replace('/login'); } catch (error) { notify((error as Error).message, 'error'); } };
   const themeButton = <button className="icon-button" aria-label={theme === 'light' ? '切换深色主题' : '切换浅色主题'} title="明暗切换" onClick={toggleTheme}>{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button>;
   const queueState = !dashboard ? null : dashboard.storage_error ? { tone: 'red', text: '存储异常' } : dashboard.paused ? { tone: 'amber', text: '队列已暂停' } : dashboard.jobs.running ? { tone: 'blue', text: `执行中 · ${dashboard.jobs.pending} 个等待` } : dashboard.jobs.pending ? { tone: 'blue', text: `${dashboard.jobs.pending} 个任务等待` } : { tone: 'green', text: '队列空闲' };
 
@@ -167,43 +172,11 @@ export default function App() {
         <footer className="footer"><span>{site.site_name} <b>v{__APP_VERSION__}</b></span><span><ShieldCheck size={13} /> AES-256-GCM 字段加密 · 私有部署</span></footer>
       </main>
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
-    </div> : authenticated === null ? <div className="loading-screen"><SealMark size="large" /><p>正在连接工作空间…</p></div> : <div className="login-layout">
-      <header className="login-header"><span className="brand" title={site.site_name}><SealMark /><span className="brand-text">{site.site_name}</span></span>{themeButton}</header>
-      <main className="login-main">
-        <section className="login-intro">
-          <WeekStrip />
-          <h1>提取一次，<br /><span>天天签到。</span></h1>
-          <p>从 AnyRouter 账号提取登录凭证，检测有效性，并按你设定的间隔自动签到。私有部署，凭证只保存在你自己的服务器上。</p>
-          <div className="login-steps"><span><KeyRound size={16} />提取凭证</span><ArrowRight size={14} /><span><ShieldCheck size={16} />检测有效</span><ArrowRight size={14} /><span><CalendarClock size={16} />定时签到</span></div>
-        </section>
-        <LoginForm error={initialError} onSuccess={token => { setCsrfToken(token); setAuthenticated(true); setPage('dashboard'); setInitialError(''); refreshData(); }} />
-      </main>
-      <footer className="login-footer"><span>{site.site_name} · v{__APP_VERSION__}</span><span><ShieldCheck size={14} />私有部署 · AES-256-GCM 加密存储</span></footer>
-    </div>}
+    </div> : <div className="loading-screen"><p>{initialError || '正在验证登录…'}</p></div>}
     <div className="toast-stack">{toasts.map(item => <div key={item.id} className={`toast ${item.kind}`} role={item.kind === 'error' ? 'alert' : 'status'}>{item.kind === 'progress' && <span className="loading-dot" />}<span>{item.message}</span><button className="icon-button small" aria-label="关闭提示" onClick={() => setToasts(previous => previous.filter(toast => toast.id !== item.id))}><X size={16} /></button></div>)}</div>
   </ConfirmProvider></TrackContext.Provider></ToastContext.Provider></BrandingContext.Provider>;
 }
 
 function Stat({ icon, label, value, caption, tone = '' }: { icon: ReactNode; label: string; value?: number; caption: string; tone?: string }) {
   return <div className="stat-card"><div className="stat-label">{label}{icon}</div><div className="stat-value">{value === undefined ? '—' : value.toLocaleString()}<span>个</span></div><span className={`stat-caption ${tone}`}>{caption}</span></div>;
-}
-
-// Decorative only: stamps mark the days of this week that have already passed, not real check-in results.
-function WeekStrip() {
-  const index = (new Date().getDay() + 6) % 7;
-  const days = ['一', '二', '三', '四', '五', '六', '日'];
-  return <div className="week-strip" aria-hidden="true">{days.map((day, position) => <span key={day} className={`week-cell ${position < index ? 'stamped' : position === index ? 'today' : ''}`} style={{ '--i': position } as CSSProperties}><span className="week-stamp">签</span><small>周{day}</small></span>)}</div>;
-}
-
-function LoginForm({ onSuccess, error }: { onSuccess: (token: string) => void; error: string }) {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const submit = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setMessage('');
-    try { const result = await api<{ csrf_token: string }>('/auth/login', 'POST', { username, password }); setPassword(''); onSuccess(result.csrf_token); }
-    catch (caught) { setMessage((caught as Error).message); } finally { setBusy(false); }
-  };
-  return <section className="login-card"><span className="login-lock"><KeyRound size={22} strokeWidth={1.6} /></span><h2>登录</h2><p>使用部署时设置的管理员账号和密码。部署信息保存在服务器项目目录的「部署信息.txt」中。</p><form onSubmit={submit}><label className="field">管理员账号<input name="username" value={username} onChange={event => setUsername(event.target.value)} required maxLength={64} autoComplete="username" /></label><label className="field">管理员密码<input name="password" type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="输入管理员密码" required autoComplete="current-password" maxLength={1024} autoFocus /></label><ErrorNotice message={message || error} /><Button variant="primary" type="submit" busy={busy} className="full-width">登录 <ArrowRight size={17} /></Button></form><div className="login-card-note"><ShieldCheck size={15} />登录状态保留 24 小时；连续输错 10 次会暂停 15 分钟。</div></section>;
 }

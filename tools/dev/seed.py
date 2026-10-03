@@ -69,7 +69,7 @@ result = lambda index: {'session': f'MTc1Nzk5{index:02d}fDE3NTc5OTM4Mzl8sample-s
 ids = []
 ids.append(account('alice.chen@example.com', validity='valid', message='凭证有效', result=result(1), quota=48.2531, checkin='signed', extracted=now - 26 * H, validated=now - 2 * H, last_checkin=now - 2 * H, created=now - 30 * H))
 ids.append(account('bob_router', validity='valid', message='凭证有效', result=result(2), quota=12.0004, checkin='already_signed', extracted=now - 50 * H, validated=now - 26 * H, last_checkin=now - 26 * H, created=now - 52 * H))
-ids.append(account('carol.wu@mail.com', validity='valid', message='凭证提取成功', result=result(3), quota=5.5, extracted=now - 40 * 60, validated=now - 40 * 60, created=now - H))
+ids.append(account('carol@example.invalid', validity='valid', message='凭证提取成功', result=result(3), quota=5.5, extracted=now - 40 * 60, validated=now - 40 * 60, created=now - H))
 ids.append(account('dave-prod', validity='invalid', message='登录凭证已失效，请重新提取', result=result(4), quota=0.9, checkin='invalid', extracted=now - 120 * H, validated=now - 3 * H, last_checkin=now - 3 * H, created=now - 125 * H))
 ids.append(account('erin.zhang@example.org', validity='blocked', message='网站拒绝访问或触发风控，需要人工处理', result=result(5), quota=31.25, checkin='needs_manual', extracted=now - 70 * H, validated=now - 5 * H, last_checkin=now - 5 * H, created=now - 72 * H))
 ids.append(account('frank_liu', validity='network_error', message='检测连接失败或超时，未判定凭证失效', result=result(6), quota=7.75, checkin='signed', extracted=now - 90 * H, validated=now - 1 * H, last_checkin=now - 25 * H, created=now - 95 * H))
@@ -80,7 +80,7 @@ ids.append(account('jack-1024', validity='valid', message='凭证有效', result
 
 p_http = proxy('香港 HTTP 节点', {'scheme': 'http', 'host': '203.0.113.10', 'port': 8080, 'username': 'user', 'password': 'x'}, status='healthy', message='网络连通（HTTP 200）；连通不等于账号登录成功', latency=286, created=now - 100 * H)
 p_socks = proxy('东京 SOCKS5', {'scheme': 'socks5', 'host': '198.51.100.7', 'port': 1080, 'username': 'proxyuser', 'password': 'x'}, status='unavailable', message='代理不可用、认证失败或连接超时', latency=None, created=now - 90 * H)
-p_ssh = proxy('自建 SSH 跳板', {'scheme': 'ssh', 'host': 'jump.example.com', 'port': 22, 'username': 'forward', 'password': 'x'}, status='needs_trust', message='请在设置中核对并确认 SSH 主机指纹', candidate='SHA256:9mxQ06sx1J3Ii45BOB7b4ktf3YFGJBpBx5KMb84tCZA', created=now - 80 * H)
+p_ssh = proxy('自建 SSH 跳板', {'scheme': 'ssh', 'host': 'jump.example.com', 'port': 22, 'username': 'forward', 'password': 'x'}, status='needs_trust', message='请在设置中核对并确认 SSH 主机指纹', candidate='SHA256:synthetic-demo-fingerprint', created=now - 80 * H)
 proxy('备用节点', {'scheme': 'auto', 'host': '192.0.2.44', 'port': 7890, 'username': '', 'password': ''}, enabled=0, created=now - 10 * H)
 
 schedule_id = uuid.uuid4().hex

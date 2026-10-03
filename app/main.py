@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import account_router
@@ -21,6 +21,8 @@ from app.console_api import console_router
 from app.update_api import update_router
 from app.remote_backup import RemoteBackup
 from app.remote_backup_api import remote_backup_router
+from app.security import secure_transport, local_health_probe
+from app.login_page import login_page, login_script
 
 
 class BodyLimit:
@@ -82,13 +84,25 @@ def create_app(config=None, service=None):
 
     @app.middleware('http')
     async def security_headers(request: Request, call_next):
-        if request.method not in ('GET', 'HEAD', 'OPTIONS') and request.url.path.startswith('/api/') and not request.url.path.startswith('/api/v1/auth/') and store.meta('maintenance') == '1':
-            return JSONResponse({'detail': '正在更新版本并保护数据，请等待健康检查结束后重试'}, status_code=503, headers={'Cache-Control': 'no-store', 'Retry-After': '5'})
-        response = await call_next(request)
+        path = request.url.path
+        private = path.startswith(('/api/', '/assets/')) and path != '/api/v1/auth/login'
+        if private and not auth.session(request):
+            response = JSONResponse({'detail': '请先登录管理页面'}, status_code=401)
+        elif (private or path == '/api/v1/auth/login') and not secure_transport(request, config):
+            response = JSONResponse({'detail': '请使用 HTTPS 或本机 SSH 隧道；禁止通过公网 HTTP 传输账号和密钥'}, status_code=426)
+        elif private and request.method not in ('GET', 'HEAD', 'OPTIONS') and not path.startswith('/api/v1/auth/') and store.meta('maintenance') == '1':
+            response = JSONResponse({'detail': '正在更新版本并保护数据，请等待健康检查结束后重试'}, status_code=503, headers={'Retry-After': '5'})
+        else:
+            response = await call_next(request)
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Vary'] = 'Cookie'
+        response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+        response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+        if config.public_url.startswith('https://'):
+            response.headers['Strict-Transport-Security'] = 'max-age=31536000'
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         return response
 
@@ -98,16 +112,26 @@ def create_app(config=None, service=None):
                              'errors': [{'field': '.'.join(map(str, item['loc'])), 'message': item['msg']} for item in error.errors()]}, status_code=422)
 
     @app.get('/healthz')
-    def health():
+    def health(request: Request):
         if engine.storage_error:
             return JSONResponse({'status': 'storage_error'}, status_code=503)
-        return {'status': 'ok', 'version': VERSION, 'schema_version': SCHEMA_VERSION}
+        if local_health_probe(request) or auth.session(request):
+            return {'status': 'ok', 'version': VERSION, 'schema_version': SCHEMA_VERSION}
+        return {'status': 'ok'}
+
+    @app.get('/login')
+    def login_view(request: Request):
+        return RedirectResponse('/') if auth.session(request) and secure_transport(request, config) else login_page(secure_transport(request, config))
+
+    @app.get('/login.js')
+    def login_js():
+        return login_script()
 
     @app.post('/api/v1/auth/login')
     async def login(request: Request, payload: LoginInput):
         token = await auth.login(request, payload.password, payload.username)
         response = JSONResponse({'csrf_token': auth.csrf(token)})
-        response.set_cookie(COOKIE_NAME, token, httponly=True, secure=config.cookie_secure, samesite='strict', max_age=86400, path='/')
+        response.set_cookie(COOKIE_NAME, token, httponly=True, secure=config.cookie_secure or config.public_url.startswith('https://'), samesite='strict', max_age=86400, path='/')
         return response
 
     @app.get('/api/v1/auth/me')
@@ -115,18 +139,20 @@ def create_app(config=None, service=None):
         return {'csrf_token': auth.csrf(token), 'name': store.settings().site_name, 'version': VERSION, 'username': config.admin_username}
 
     @app.get('/api/v1/branding')
-    def branding():
+    def branding(token=Depends(auth.require)):
         return public_branding(store)
 
     @app.get('/favicon.svg')
-    def favicon():
-        return Response(favicon_svg(store.settings().site_icon_text), media_type='image/svg+xml')
+    def favicon(request: Request):
+        text = store.settings().site_icon_text if auth.session(request) and secure_transport(request, config) else '·'
+        return Response(favicon_svg(text), media_type='image/svg+xml')
 
     @app.post('/api/v1/auth/logout')
     def logout(token=Depends(auth.require)):
         auth.logout(token)
         response = JSONResponse({'ok': True})
-        response.delete_cookie(COOKIE_NAME, path='/', secure=config.cookie_secure, httponly=True, samesite='strict')
+        response.delete_cookie(COOKIE_NAME, path='/', secure=config.cookie_secure or config.public_url.startswith('https://'), httponly=True, samesite='strict')
+        response.headers['Clear-Site-Data'] = '"cache", "storage"'
         return response
 
     app.include_router(account_router(store, auth, engine))
@@ -142,9 +168,13 @@ def create_app(config=None, service=None):
         app.mount('/assets', StaticFiles(directory=assets), name='assets')
 
     @app.get('/{path:path}')
-    def frontend(path: str):
+    def frontend(path: str, request: Request):
         if path.startswith('api/'):
             return JSONResponse({'detail': '接口不存在'}, status_code=404)
+        if not auth.session(request):
+            return login_page(secure_transport(request, config))
+        if not secure_transport(request, config):
+            return login_page(False)
         index = ROOT / 'frontend' / 'dist' / 'index.html'
         if not index.exists():
             return JSONResponse({'detail': '后端已启动，请先构建 frontend 前端资源'}, status_code=503)

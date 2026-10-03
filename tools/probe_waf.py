@@ -30,7 +30,7 @@ async def main():
         await page.goto('https://anyrouter.top/login', wait_until='domcontentloaded')
         await page.wait_for_selector('input[name=username]', timeout=30000)
         cookies = {c['name']: c['value'] for c in await context.cookies(['https://anyrouter.top'])}
-        print('browser cookies:', {k: (v[:12] + '…') for k, v in cookies.items()})
+        print('browser cookie names:', sorted(cookies))
         print('browser UA:', await page.evaluate('navigator.userAgent'))
         inpage = await page.evaluate("async () => { const r = await fetch('/api/user/self', {headers: {'Accept': 'application/json'}}); return {status: r.status, body: (await r.text()).slice(0, 100)}; }")
         print('in-page fetch /api/user/self ->', inpage)

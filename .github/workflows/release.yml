@@ -17,7 +17,9 @@ jobs:
         with:
           node-version: '24'
       - run: pip install -r requirements.txt
+      - run: python tools/verify_source_privacy.py
       - run: python tools/verify_remote_backup.py
+      - run: python tools/verify_privacy.py
       - run: python tools/verify_release_permissions.py
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile --ignore-scripts && pnpm run build
@@ -41,6 +43,32 @@ jobs:
           PY
           docker build -t anyqiandao:release-check .release/smoke-source
           docker run --rm --network none --read-only --tmpfs /tmp:size=67108864 --entrypoint python anyqiandao:release-check -c 'from app.main import create_app; from app.config import Config; from argon2 import PasswordHasher; from pathlib import Path; app=create_app(Config(bytes(range(32)), PasswordHasher().hash("synthetic-image-check"), Path("/tmp/check"), start_worker=False)); print("App initialized", app.version)'
+      - name: Verify old updater health probe and anonymous isolation
+        shell: bash
+        run: |
+          trap 'docker rm -f anyqiandao-readiness-check >/dev/null 2>&1 || true' EXIT
+          docker run -d --name anyqiandao-readiness-check --read-only --tmpfs /tmp:size=67108864 -p 127.0.0.1:19888:8000 --entrypoint python anyqiandao:release-check -c 'import uvicorn; from app.main import create_app; from app.config import Config; from argon2 import PasswordHasher; from pathlib import Path; app=create_app(Config(bytes(range(32)), PasswordHasher().hash("synthetic-image-check"), Path("/tmp/check"), "https://example.invalid", start_worker=False)); uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False, proxy_headers=False)'
+          python - <<'PY'
+          import json, time, urllib.request
+          from pathlib import Path
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:19888/healthz', timeout=2) as response:
+                      state = json.load(response)
+                  break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit('Container did not become ready')
+          assert state['version'] == Path('VERSION').read_text().strip(), state
+          request = urllib.request.Request('http://127.0.0.1:19888/healthz', headers={'Host': 'example.invalid', 'X-Forwarded-Proto': 'https'})
+          with urllib.request.urlopen(request, timeout=5) as response:
+              assert json.load(response) == {'status': 'ok'}
+          with urllib.request.urlopen('http://127.0.0.1:19888/', timeout=5) as response:
+              page = response.read().decode()
+              assert '管理员登录' in page and '/assets/' not in page
+          print('Old updater health checks and public metadata isolation passed.')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: release-package

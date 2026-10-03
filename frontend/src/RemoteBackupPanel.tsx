@@ -7,13 +7,14 @@ import './remote-backup.css';
 type Target = 'oss' | 'sftp';
 interface OSS { enabled: boolean; region: string; bucket: string; access_key_id: string; access_key_secret?: string; has_access_key_secret?: boolean; prefix: string; internal: boolean; endpoint: string; keep: number; }
 interface SFTP { enabled: boolean; host: string; port: number; username: string; auth: 'password' | 'private_key'; password?: string; private_key?: string; passphrase?: string; has_password?: boolean; has_private_key?: boolean; has_passphrase?: boolean; directory: string; keep: number; }
-interface Settings { enabled: boolean; every: number; unit: 'days' | 'hours'; time: string; timezone: string; mode: 'app' | 'full'; oss: OSS; sftp: SFTP; }
+interface Settings { enabled: boolean; every: number; unit: 'days' | 'hours'; time: string; timezone: string; mode: 'app' | 'full'; encryption_password?: string; has_encryption_password?: boolean; oss: OSS; sftp: SFTP; }
 interface Result { at: number; name: string; size: number; status: string; message: string; duration: number; }
 interface BackupData { settings: Settings; fingerprint: string; busy: boolean; state: { running?: boolean; next_run?: number; last_run?: number; started_at?: number; source?: string; status?: string; result?: string; targets?: Partial<Record<Target, Result>>; }; }
 interface Directory { path: string; parent: string; directories: string[]; truncated: boolean; }
 
 function payload(settings: Settings) {
   const value = structuredClone(settings);
+  delete value.has_encryption_password;
   delete value.oss.has_access_key_secret;
   delete value.sftp.has_password; delete value.sftp.has_private_key; delete value.sftp.has_passphrase;
   return value;
@@ -76,7 +77,8 @@ function BackupForm({ data, reload }: { data: BackupData; reload: () => Promise<
       <input type="checkbox" role="switch" checked={settings.enabled} disabled={disabled} onChange={event => update('enabled', event.target.checked)} />
       <span><strong>启用远程自动备份</strong><small>按计划将备份上传到已启用的目标。关闭后保留配置，仍可手动备份；修改后请保存。</small></span><b>{settings.enabled ? '已开启' : '已关闭'}</b>
     </label>
-    <p className="form-hint">每次生成一个 ZIP 并上传至所有已启用目标，上传成功后按各自“保留份数”清理本实例的旧备份。包内包含账号密码和凭证，请使用自己的私有存储。备份结果可在运行日志的“备份”分类查看，并随日志保留策略清理。</p>
+    <p className="form-hint">每次生成 AES-256-GCM 加密 ASB 文件并上传至所有已启用目标，上传成功后按各自“保留份数”清理本实例的旧备份。独立备份密码仅加密保存，不会放入备份文件；请单独保管。备份结果可在运行日志的“备份”分类查看，并随日志保留策略清理。</p>
+    <label className="field">独立备份加密密码（至少 12 位）<input type="password" autoComplete="new-password" disabled={disabled} maxLength={1024} value={settings.encryption_password || ''} placeholder={secretPlaceholder(settings.has_encryption_password)} onChange={event => update('encryption_password', event.target.value)} /><small>恢复时必须输入此密码，遗失无法恢复。更改密码只影响以后的备份。</small></label>
     <div className="backup-overview" aria-live="polite">
       <div><small>下次备份</small><strong>{data.settings.enabled ? formatTime(data.state.next_run, data.settings.timezone) : '自动备份已关闭'}</strong></div>
       <div><small>上次备份</small><strong>{formatTime(data.state.last_run, data.settings.timezone)}{data.state.last_run ? `（${data.state.source === 'scheduled' ? '定时' : '手动'}）` : ''}</strong></div>
@@ -92,7 +94,7 @@ function BackupForm({ data, reload }: { data: BackupData; reload: () => Promise<
       </div>
       <p className="form-hint">每 {settings.every} {settings.unit === 'days' ? `天 ${settings.time}` : `小时（以 ${settings.time} 为起点）`}备份一次。停机期间错过的计划，恢复后补做一次；手动备份不改变定时计划。</p>
       <div className="backup-modes">
-        <label className={settings.mode === 'app' ? 'selected' : ''}><input type="radio" name="backup-mode" value="app" checked={settings.mode === 'app'} onChange={() => update('mode', 'app')} /><span><strong>应用数据包（推荐）</strong><small>账号、凭证、代理、计划、签到统计及运行设置。可在“备份与恢复”直接导入 ZIP 或 JSON。</small></span></label>
+        <label className={settings.mode === 'app' ? 'selected' : ''}><input type="radio" name="backup-mode" value="app" checked={settings.mode === 'app'} onChange={() => update('mode', 'app')} /><span><strong>应用数据包（推荐）</strong><small>账号、凭证、代理、计划、签到统计及运行设置。可在“备份与恢复”输入备份密码后导入 ASB。</small></span></label>
         <label className={settings.mode === 'full' ? 'selected' : ''}><input type="radio" name="backup-mode" value="full" checked={settings.mode === 'full'} onChange={() => update('mode', 'full')} /><span><strong>完整备份</strong><small>应用数据包、程序源码、数据库快照、原密钥和基础部署配置。不含日志、临时会话和远程备份凭证。</small></span></label>
       </div>
     </fieldset>

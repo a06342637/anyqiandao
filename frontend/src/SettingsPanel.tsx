@@ -158,14 +158,16 @@ function BackupPanel() {
   const toast = useToast();
   const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
+  const [passphrase, setPassphrase] = useState('');
+  const [restorePassphrase, setRestorePassphrase] = useState('');
   const [summary, setSummary] = useState<Record<string, number> | null>(null);
   const backup = async () => {
     setBusy(true);
     try {
-      const response = await fetchApi('/backup', 'POST');
+      const response = await fetchApi('/backup', 'POST', { passphrase });
       const blob = await response.blob();
-      const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') || '')?.[1] || 'any-signin-backup.json';
-      downloadBlob(blob, name);
+      const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') || '')?.[1] || 'any-signin-backup.asb';
+      downloadBlob(blob, name); setPassphrase('');
       toast(`备份已生成：${response.headers.get('x-backup-accounts') || '?'} 个账号，已开始下载 ${name}`, 'success');
     } catch (error) { toast((error as Error).message, 'error'); } finally { setBusy(false); }
   };
@@ -173,14 +175,14 @@ function BackupPanel() {
     if (!await confirm({ title: `从「${file.name}」恢复？`, message: '按账号合并：备份里有而这里没有的账号会新增；已存在的账号会更新密码、备注和更新的凭证；计划、代理和签到统计一并合并。不会删除现有数据。', confirmLabel: '开始恢复' })) return;
     setBusy(true);
     try {
-      const response = await fetch('/api/v1/backup/restore', { method: 'POST', credentials: 'same-origin', body: await file.arrayBuffer(), headers: { 'Content-Type': file.name.endsWith('.zip') ? 'application/zip' : 'application/json', 'X-CSRF-Token': (await api<{ csrf_token: string }>('/auth/me')).csrf_token } });
+      const response = await fetch('/api/v1/backup/restore', { method: 'POST', credentials: 'same-origin', body: await file.arrayBuffer(), headers: { 'Content-Type': file.name.endsWith('.zip') ? 'application/zip' : 'application/json', 'X-Backup-Password': btoa(String.fromCharCode(...new TextEncoder().encode(restorePassphrase))), 'X-CSRF-Token': (await api<{ csrf_token: string }>('/auth/me')).csrf_token } });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || `恢复失败（${response.status}）`);
       setSummary(payload); refreshData();
       toast(`恢复完成：新增 ${payload.accounts_added} 个账号，更新 ${payload.accounts_updated} 个，${payload.schedules} 个计划，${payload.proxies} 个代理，${payload.checkins} 条签到记录`, 'success');
     } catch (error) { toast((error as Error).message, 'error'); } finally { setBusy(false); }
   };
-  return <div className="backup-panel"><div className="settings-section"><h3><DatabaseBackup size={15} /> 一键备份</h3><p className="form-hint">导出全部账号（含密码、凭证、备注、排序）、签到计划、代理节点、签到统计和运行参数为一个 JSON 文件。文件包含明文密码和 Cookie，请只保存在你自己的安全位置。</p><Button variant="primary" busy={busy} onClick={() => void backup()}><DatabaseBackup size={15} />下载备份文件</Button></div>
-    <div className="settings-section"><h3><Upload size={15} /> 从备份恢复</h3><p className="form-hint">选择之前下载的 JSON 或远程备份 ZIP 文件。可以恢复到换了加密密钥的新服务器。恢复前请先暂停队列并等待正在执行的任务结束。</p><label className="button"><Upload size={15} />选择备份文件并恢复<input type="file" accept=".json,.zip,application/json,application/zip" hidden disabled={busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void restore(file); }} /></label>{summary && <div className="notice"><strong>上次恢复结果</strong><p>新增账号 {summary.accounts_added} · 更新账号 {summary.accounts_updated} · 计划 {summary.schedules} · 代理 {summary.proxies} · 签到记录 {summary.checkins}</p></div>}</div>
+  return <div className="backup-panel"><div className="settings-section"><h3><DatabaseBackup size={15} /> 一键备份</h3><p className="form-hint">账号、凭证、代理、计划和统计使用独立密码加密为 ASB 文件。请单独保存密码，丢失后无法恢复。</p><label className="field">备份加密密码（至少 12 位）<input type="password" autoComplete="new-password" minLength={12} maxLength={1024} value={passphrase} onChange={event => setPassphrase(event.target.value)} /></label><Button variant="primary" busy={busy} disabled={passphrase.length < 12} onClick={() => void backup()}><DatabaseBackup size={15} />下载加密备份</Button></div>
+    <div className="settings-section"><h3><Upload size={15} /> 从备份恢复</h3><p className="form-hint">选择加密 ASB 文件并输入对应密码。兼容旧版 JSON / ZIP 备份。可以恢复到换了加密密钥的新服务器。恢复前请先暂停队列并等待正在执行的任务结束。</p><label className="field">恢复密码（旧版未加密文件可留空）<input type="password" autoComplete="new-password" maxLength={1024} value={restorePassphrase} onChange={event => setRestorePassphrase(event.target.value)} /></label><label className="button"><Upload size={15} />选择备份文件并恢复<input type="file" accept=".asb,.json,.zip,application/octet-stream,application/json,application/zip" hidden disabled={busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void restore(file); }} /></label>{summary && <div className="notice"><strong>上次恢复结果</strong><p>新增账号 {summary.accounts_added} · 更新账号 {summary.accounts_updated} · 计划 {summary.schedules} · 代理 {summary.proxies} · 签到记录 {summary.checkins}</p></div>}</div>
     <div className="settings-section"><h3>服务器级备份</h3><p className="form-hint">数据库文件级备份（含加密密钥校验）请在服务器上运行 scripts/backup.sh；升级前会自动执行。两种备份互补：网页备份便于迁移，脚本备份便于回滚。</p></div></div>;
 }

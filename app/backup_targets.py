@@ -48,7 +48,7 @@ async def blocking(function, *args, **kwargs):
 
 
 def owned_backup(name, instance):
-    return bool(re.fullmatch(r'any-signin-' + re.escape(instance) + r'-\d{8}T\d{12}Z-[a-f0-9]{8}-(app|full)\.zip', name))
+    return bool(re.fullmatch(r'any-signin-' + re.escape(instance) + r'-\d{8}T\d{12}Z-[a-f0-9]{8}-(app|full)\.(zip|asb)', name))
 
 
 class OSSTarget:
@@ -103,7 +103,7 @@ class SFTPTarget:
         self.client, self.settings = client, settings
 
     async def probe(self):
-        await self.client.makedirs(self.settings.directory, exist_ok=True)
+        await self.client.makedirs(self.settings.directory, attrs=asyncssh.SFTPAttrs(permissions=0o700), exist_ok=True)
         path = posixpath.join(self.settings.directory, '.any-signin-probe-' + uuid.uuid4().hex)
         async with self.client.open(path, 'wb') as file:
             await file.write(b'connection test')
@@ -113,11 +113,12 @@ class SFTPTarget:
             await self.client.remove(path)
 
     async def upload(self, path, name):
-        await self.client.makedirs(self.settings.directory, exist_ok=True)
+        await self.client.makedirs(self.settings.directory, attrs=asyncssh.SFTPAttrs(permissions=0o700), exist_ok=True)
         final = posixpath.join(self.settings.directory, name)
         temporary = final + '.part'
         try:
             await self.client.put(str(path), temporary)
+            await self.client.chmod(temporary, 0o600)
             await self.client.rename(temporary, final)
         finally:
             try:

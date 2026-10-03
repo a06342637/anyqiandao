@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 
 from app.checkin_state import BEIJING, confirmed_today, merge_daily_state, observe_balance
 from app.router_service import CHECKIN_PATH, RouterService
+from tools.backup_fixture import export_document
 from tools.verify_v3 import ApiTests as ExistingFixture, account
 
 
@@ -113,7 +114,7 @@ class RestoreSafetyTests(unittest.IsolatedAsyncioTestCase):
         identifier = account(self.store)
         now = time.time()
         confirmed = self.store.observe_account(identifier, '42', 125, 10, at=now - 60, confirm=True)
-        document = (await self.client.post('/api/v1/backup')).json()
+        document = await export_document(self.client)
         document['accounts'][0]['daily_checkin'] = observe_balance(None, '42', 110, 25, now - 30).model_dump()
         response = await self.client.post('/api/v1/backup/restore', json=document)
         self.assertEqual(response.status_code, 200, response.text)
@@ -126,7 +127,7 @@ class RestoreSafetyTests(unittest.IsolatedAsyncioTestCase):
         identifier = account(self.store)
         now = time.time()
         confirmed = self.store.observe_account(identifier, '42', 125, 10, at=now - 60, confirm=True)
-        document = (await self.client.post('/api/v1/backup')).json()
+        document = await export_document(self.client)
         self.store.execute('UPDATE accounts SET checkin_state_enc=NULL WHERE id=?', (identifier,))
         self.store.observe_account(identifier, '42', 110, 25, at=now - 10)
         response = await self.client.post('/api/v1/backup/restore', json=document)
@@ -143,7 +144,7 @@ class RestoreSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.store.execute('UPDATE accounts SET quota=?,created=?,updated=?,last_validated=? WHERE id=?',
                            (100, now - 100, now - 100, now - 100, identifier))
         self.store.observe_account(identifier, '42', 100, 10, at=now - 60)
-        document = (await self.client.post('/api/v1/backup')).json()
+        document = await export_document(self.client)
         self.service.insights = AsyncMock(return_value={'view': 'tokens', 'profile': {'quota': 120, 'used_quota': 15},
                                                        'items': [], 'fetched_at': now - 1})
         response = await self.client.post(f'/api/v1/accounts/{identifier}/insights', json={'view': 'tokens'})
@@ -160,7 +161,7 @@ class RestoreSafetyTests(unittest.IsolatedAsyncioTestCase):
         identifier = account(self.store)
         now = time.time()
         self.store.observe_account(identifier, '42', 125, 10, at=now - 86400, confirm=True)
-        document = (await self.client.post('/api/v1/backup')).json()
+        document = await export_document(self.client)
         document['accounts'][0]['daily_checkin'] = observe_balance(None, '42', 125, 10, now - 1).model_dump()
         response = await self.client.post('/api/v1/backup/restore', json=document)
         self.assertEqual(response.status_code, 200, response.text)

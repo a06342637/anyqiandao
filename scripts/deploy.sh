@@ -116,8 +116,7 @@ else
         exit 1
     fi
     if [[ -z "$PUBLIC_URL" ]]; then
-        SERVER_IP="$(python3 scripts/deploy_config.py host "${APP_INSTALL_HOST:-}")"
-        PUBLIC_URL="http://${SERVER_IP}:${APP_PORT}"
+        PUBLIC_URL="http://127.0.0.1:${APP_PORT}"
     fi
     INIT_OPTIONS=(--root /workspace --public-url "$PUBLIC_URL" --port "$APP_PORT" --username "$ADMIN_USERNAME" --owner 10001 --password-stdin)
     if [[ "$PUBLIC_URL" == https://* ]]; then
@@ -165,7 +164,7 @@ fi
 bash scripts/install-updater.sh --reset-baseline
 printf '\nany签到助手 v%s 已部署\n访问地址：%s\n账号：%s\n密码：请查看 %s/部署信息.txt\n' "$VERSION" "$PUBLIC_URL" "${ADMIN_USERNAME:-admin}" "$ROOT"
 if [[ "$PUBLIC_URL" == http://* ]]; then
-    printf 'HTTP 不加密：请自行配置防火墙和 HTTPS 反代，再更新 .env 中的 APP_PUBLIC_URL。\n'
+    printf '仅允许本机安全访问：请通过 SSH 隧道连接，或配置 HTTPS 反代后更新 APP_PUBLIC_URL；公网 HTTP 无法登录。\n'
 fi
 printf '仅管理本项目的容器；不会改动其他服务、磁盘或全局镜像。\n'
 printf '如无法从外网访问，请在云安全组和防火墙中放行 .env 的 APP_PORT；脚本不会关闭防火墙。\n'

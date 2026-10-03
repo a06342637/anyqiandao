@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 from app.checkin_state import BEIJING, balance_credit, beijing_day, confirmed_today, fixed_reward, observe_balance
 from app.crypto import Vault
 from app.db import SCHEMA_VERSION, Store
+from tools.backup_fixture import export_document
 from tools.verify_v3 import ApiTests as ExistingFixture, account
 from tools.verify_v033 import ReceiptTests as ReceiptFixture
 
@@ -157,7 +158,7 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
         identifier = account(self.store)
         self.seed_confirmation(identifier)
         self.store.record_checkin(identifier, None, 'signed', 100, 200, reward_amount=25)
-        document = (await self.client.post('/api/v1/backup')).json()
+        document = await export_document(self.client)
         self.assertEqual(document['checkins'][0]['reward_amount'], 25)
         self.assertEqual(document['accounts'][0]['daily_checkin']['api_user'], '42')
         self.store.execute('UPDATE accounts SET checkin_state_enc=NULL')
@@ -170,7 +171,7 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_backup_cannot_mix_other_identity_evidence(self):
         identifier = account(self.store)
         self.seed_confirmation(identifier)
-        document = (await self.client.post('/api/v1/backup')).json()
+        document = await export_document(self.client)
         document['accounts'][0]['daily_checkin']['api_user'] = '99'
         self.store.execute('UPDATE accounts SET checkin_state_enc=NULL')
         response = await self.client.post('/api/v1/backup/restore', json=document)

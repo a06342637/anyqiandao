@@ -1,122 +1,18 @@
-any签到助手 · Docker 自动部署教程（v0.4.1）
+any签到助手 v0.5.0 · 安全部署说明
 
-一、要上传哪些文件
+完整的新机器部署教程请阅读 README.md 的“新机器部署教程”。
 
-把本项目文件夹上传到 Linux 服务器，例如 /opt/any-signin-assistant。
-必须一并上传 .project-id、.dockerignore 等隐藏文件，不要只上传 app 文件夹。
-不需要上传 Python / Node 环境、node_modules、缓存或旧发布包。
-本机不需要安装 Docker、Node 或 Python；服务器负责在 Docker 里构建并运行。
-服务器建议 Ubuntu 22.04+ / Debian 12+，内存至少 2GB、可用磁盘至少 6GB，能连接软件源与镜像仓库。
-项目源码只有几 MB；服务器仍需下载浏览器、运行环境和 Docker 镜像，镜像占用不等于源码大小。
+1. 在新服务器 SSH 终端执行 sudo -i，安装 git 和 ca-certificates。
+2. git clone https://github.com/a06342637/anyqiandao.git /opt/any-signin-assistant
+3. cd /opt/any-signin-assistant
+4. 有域名时：bash scripts/deploy.sh https://你的域名（先解析域名、放行 80/443）。
+   无域名时：bash scripts/deploy.sh（默认仅监听 127.0.0.1）。
+5. 无域名时，在自己电脑建立 SSH 隧道：
+   ssh -N -L 18780:127.0.0.1:18780 ubuntu@你的服务器IP
+   端口按实际配置修改，在浏览器访问 http://127.0.0.1:18780。
 
-二、首次部署：一条命令
-
-连接服务器，在终端执行：
-
-    cd /opt/any-signin-assistant
-    sudo bash scripts/deploy.sh
-
-如果已经执行 sudo -i 进入 root，就用：
-
-    cd /opt/any-signin-assistant
-    bash scripts/deploy.sh
-
-注意：命令是 sudo -i，不是 sduo -i。
-
-脚本会检查运行依赖，缺少时自动安装 Python 3、Docker Engine 和 Compose。
-已有 Docker 不会被卸载或替换，正在运行的 Docker 不会被重启。
-如果它检测到冲突的软件包、远程 Docker context 或别的项目目录，会停止并给出提示，不会擅自接管。
-
-首次安装依次询问：
-
-    应用端口：直接回车 = 随机选择空闲端口；也可指定 1–65535 的端口。
-    管理员用户名：直接回车 = admin。
-    管理员密码：直接回车 = 自动生成随机强密码；自定义为 12–1024 个字符。
-
-因此，三个问题都直接按回车也能部署。密码输入不回显。
-端口或用户名输入不合法会重新询问；密码不够长也会重新询问。
-
-随后自动构建镜像、创建配置和密钥、启动容器、等待健康检查，并安装在线更新执行器。
-首次构建需要下载较大的浏览器镜像，可能需要几分钟至十几分钟，请保持终端连接。
-成功后打印访问地址，例如 http://服务器IP:随机端口。
-
-三、在哪里查看账号和密码
-
-在服务器项目目录执行：
-
-    sudo cat 部署信息.txt
-
-密码不会出现在镜像构建日志中。该文件含明文初始管理密码，请私密保存，不要随源码上传。
-如果后来通过重置命令更改密码，这份初始部署信息不会自动改写。
-
-四、外网访问和 HTTPS
-
-如果外网打不开，先确认云服务器安全组与防火墙放行了实际选中的 TCP 端口。
-端口保存在服务器 .env 的 APP_PORT；不要把示例中的“随机端口”当成固定值。
-脚本不会关闭防火墙、不会自动修改云安全组，也不会影响其他容器。
-Docker 映射端口可能绕过部分 UFW 规则；需要限源访问时，请同时使用云安全组或 DOCKER-USER 规则。
-
-默认新部署是 HTTP + IP + 端口，不占用 80/443，不自动申请域名证书。
-公网 HTTP 不加密，正式使用建议配置 HTTPS 反代。配置方法见 docs/v0.3.0-部署与更新.md。
-已有 HTTPS/Caddy 部署再次运行命令会保持原样，不会改成 HTTP 或随机端口。
-若公网 IP 探测不正确，可在首次部署时运行：
-
-    sudo APP_INSTALL_HOST=你的服务器IPv4 bash scripts/deploy.sh
-
-如需内置 Caddy 自动管理域名证书，先把域名解析到服务器并确保 80/443 空闲，再运行：
-
-    sudo bash scripts/deploy.sh https://你的域名
-
-五、以后更新：覆盖源码，再运行同一条命令
-
-把新版项目源码上传覆盖到原来的部署目录，然后执行：
-
-    cd /opt/any-signin-assistant
-    sudo bash scripts/deploy.sh
-
-必须保留服务器已有的这些内容：
-
-    .env
-    secrets/
-    data/
-    backups/
-    updates/
-    部署信息.txt
-
-不要用“先删整个目录再上传”的方式更新，也不要把另一台机器的配置和密码覆盖过来。
-重复部署不会再次随机端口或重置管理员；它保留原配置、密钥和账号数据。
-先构建新镜像，再暂停队列、等待正在执行的任务结束、备份数据库与密钥，最后切换服务。
-健康检查通过后恢复原来的队列暂停状态。备份位于 backups/，不要公开分享。
-同目录部署与在线更新使用互斥锁，不能同时执行。
-如果本机检测到本项目在另一个目录运行，会拒绝启动，请回原目录更新。
-
-构建或备份阶段失败时，原配置和服务保留，脚本尝试恢复队列状态。
-切换后健康检查失败时，保留配置与备份并保持队列暂停，不删除数据；根据报错修复后在原目录重试。
-手动覆盖源码不能还原已被覆盖的旧源码；需要完整源码自动回滚时，请使用项目发布包更新流程，见 docs/升级与回滚.md。
-
-六、常用命令（先进入服务器项目目录）
-
-查看状态：
-    sudo docker compose -p any-signin-assistant ps
-
-查看最近日志：
-    sudo docker compose -p any-signin-assistant logs --tail=100 app
-
-重启应用：
-    sudo docker compose -p any-signin-assistant restart app
-
-单独做完整数据备份（备份后队列保持暂停，需在页面恢复）：
-    sudo bash scripts/backup.sh
-
-重置管理员密码：
-    sudo bash scripts/reset-password.sh
-
-切勿运行 docker compose down -v、全局 docker system prune 或删除 data/secrets 来“修复”问题。
-在线更新默认使用 a06342637/anyqiandao，也支持自定义可信仓库。
-
-七、版本更新和远程备份
-
-默认发布仓库：https://github.com/a06342637/anyqiandao
-设置 → 版本更新：检测版本、更新版本；也可填写其他可信 GitHub 仓库。
-设置 → 远程自动备份：配置阿里云 OSS 或 SSH/SFTP，保存后测试连接。
-详情见 docs/远程自动备份.md。
+公网 HTTP 不接受登录、账号或密钥传输。现有 HTTPS 部署升级时保留原配置。
+管理员初始信息在服务器部署目录的 部署信息.txt，请勿公开。
+更新优先使用设置中的一键更新，默认仓库 a06342637/anyqiandao。
+设置远程自动备份时需要独立加密密码，恢复 ASB 文件必须使用原密码。
+详情见 docs/安全与隐私.md 和 docs/远程自动备份.md。

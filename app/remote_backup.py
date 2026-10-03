@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import asyncssh
 
 from app.backup_api import backup_document
+from app.backup_encryption import encrypt_file
 from app.backup_targets import BackupError, blocking, open_target, safe_error
 from app.config import ROOT, VERSION
 from app.remote_backup_schema import RemoteBackupSettings
@@ -112,6 +113,7 @@ class RemoteBackup:
 
     def public(self):
         settings = self.settings().model_dump()
+        settings['has_encryption_password'] = bool(settings.pop('encryption_password'))
         for kind, fields in (('oss', ('access_key_secret',)), ('sftp', ('password', 'private_key', 'passphrase'))):
             for field in fields:
                 settings[kind]['has_' + field] = bool(settings[kind].pop(field))
@@ -136,6 +138,12 @@ class RemoteBackup:
         self.require_idle()
         previous = self.settings()
         settings = incoming.model_copy(deep=True)
+        changed_ssh = any(getattr(settings.sftp, key) != getattr(previous.sftp, key) for key in ('host', 'port', 'username'))
+        if changed_ssh and (previous.sftp.password or previous.sftp.private_key) and not (incoming.sftp.password or incoming.sftp.private_key):
+            raise BackupError('SSH 目标已更改，请重新输入密码或私钥，避免把旧凭证发送给新服务器')
+        settings.encryption_password = settings.encryption_password or previous.encryption_password
+        if (settings.oss.enabled or settings.sftp.enabled) and len(settings.encryption_password) < 12:
+            raise BackupError('请先设置至少 12 位独立备份密码，备份文件将使用 AES-256-GCM 加密')
         for kind, fields in (('oss', ('access_key_secret',)), ('sftp', ('password', 'private_key', 'passphrase'))):
             for field in fields:
                 if not getattr(getattr(settings, kind), field):
@@ -186,6 +194,8 @@ class RemoteBackup:
         if self.stopping or self.store.meta('maintenance') == '1':
             raise BackupError('应用正在停止或更新，请稍后再备份')
         settings = self.settings()
+        if len(settings.encryption_password) < 12:
+            raise BackupError('请先设置至少 12 位备份密码，未生成或上传明文备份')
         if not (settings.oss.enabled or settings.sftp.enabled):
             raise BackupError('请先保存并启用至少一个备份目标')
         state = self.state()
@@ -203,8 +213,10 @@ class RemoteBackup:
             try:
                 self.log(f'{"定时" if source == "scheduled" else "手动"}远程备份开始：{"应用数据包" if settings.mode == "app" else "完整备份"}')
                 temporary = tempfile.TemporaryDirectory(prefix='.backup-', dir=self.store.path.parent)
-                name = f'any-signin-{self.instance}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex[:8]}-{settings.mode}.zip'
-                path = await blocking(create_archive, self.store, self.config, settings.mode, Path(temporary.name), name)
+                name = f'any-signin-{self.instance}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex[:8]}-{settings.mode}.asb'
+                plain = await blocking(create_archive, self.store, self.config, settings.mode, Path(temporary.name), 'payload.zip')
+                path = await blocking(encrypt_file, plain, Path(temporary.name) / name, settings.encryption_password)
+                plain.unlink()
                 size = path.stat().st_size
                 for kind in ('oss', 'sftp'):
                     target_settings = getattr(settings, kind)
@@ -255,6 +267,11 @@ class RemoteBackup:
             state.update(running=False, status='error', result='上次备份因服务退出中断')
             self.log(state['result'], 'warning')
         settings = self.settings()
+        if settings.enabled and len(settings.encryption_password) < 12:
+            settings.enabled = False
+            self.store.set_meta(CONFIG_KEY, self.store.vault.seal(settings.model_dump(), CONFIG_KEY))
+            state.update(next_run=None, status='warning', result='请设置独立备份密码后重新启用自动备份')
+            self.log(state['result'], 'warning')
         if settings.enabled and not state.get('next_run'):
             state['next_run'] = next_run(settings, time.time())
         self.write_state(state)

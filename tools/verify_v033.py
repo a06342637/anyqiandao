@@ -18,6 +18,7 @@ from app.errors import TaskError
 from app.responses import checkin_result
 from app.router_service import BrowserError, BrowserSession, CHECKIN_PATH, REQUEST_MARKER, RouterService, api_headers, checkin_gain
 from app.schemas import RuntimeSettings
+from tools.backup_fixture import export_document
 from tools.verify_v3 import ApiTests as ExistingFixture, account
 
 
@@ -218,7 +219,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
         balance = self.store.checkin_balance(job_id=job['id'])
         self.assertEqual((balance['delta'], balance['earned']), (23, 25))
         self.assertEqual((await self.client.get('/api/v1/stats')).json()['earned'], 25)
-        document = (await self.client.post('/api/v1/backup')).json()
+        document = await export_document(self.client)
         self.assertEqual((document['checkins'][0]['used_before'], document['checkins'][0]['used_after']), (10, 12))
         self.store.execute('DELETE FROM checkins WHERE account_id=?', (identifier,))
         response = await self.client.post('/api/v1/backup/restore', json=document)

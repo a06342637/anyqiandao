@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from tools.backup_fixture import export_document
 from tools.verify_v3 import ApiTests as ExistingFixture, account
 from app.console_data import read_console, token_view, usage_view
 from app.errors import TaskError
@@ -248,7 +249,7 @@ class ManualCredentialTests(ApiFixture):
 
     async def test_manual_backup_roundtrip_keeps_source(self):
         await self.import_manual()
-        document = (await self.client.post('/api/v1/backup')).json()
+        document = await export_document(self.client)
         self.assertFalse(document['accounts'][0].get('password'))
         self.store.execute('DELETE FROM accounts')
         response = await self.client.post('/api/v1/backup/restore', json=document)
@@ -325,7 +326,7 @@ class ConsoleTests(ApiFixture):
         self.service.insights = AsyncMock(return_value={'view': 'tokens', 'items': [{'key': 'sk-synthetic-backup-exclusion'}]})
         await self.query(identifier)
         await self.engine.process(self.engine.claim())
-        self.assertNotIn('sk-synthetic-backup-exclusion', (await self.client.post('/api/v1/backup')).text)
+        self.assertNotIn('sk-synthetic-backup-exclusion', json.dumps(await export_document(self.client)))
 
 
 class ConsoleAdapterTests(unittest.IsolatedAsyncioTestCase):

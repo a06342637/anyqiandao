@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 import httpx
 from argon2 import PasswordHasher
 from app import update_common as common
+from tools.backup_fixture import export_document
 from app.config import Config
 from app.crypto import Vault
 from app.db import SCHEMA_VERSION, Store
@@ -80,12 +81,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         for name in ('requests', 'status'):
             (self.root / 'updates' / name).mkdir(parents=True)
         self.config = Config(bytes(range(32)), PasswordHasher().hash('test-admin-password'), self.root / 'data',
-                             'http://testserver', start_worker=False, admin_username='owner', update_dir=self.root / 'updates')
+                             'https://testserver', start_worker=False, admin_username='owner', update_dir=self.root / 'updates')
         self.service = FakeService()
         self.app = create_app(self.config, self.service)
         self.store, self.engine = self.app.state.store, self.app.state.engine
         self.store.set_meta('settings', self.store.settings().model_copy(update={'proxy_mode': 'direct', 'auto_checkin': False, 'account_gap': 0}).model_dump_json())
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url='http://testserver')
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url='https://testserver')
         response = await self.client.post('/api/v1/auth/login', json={'username': 'owner', 'password': 'test-admin-password'})
         self.assertEqual(response.status_code, 200)
         self.client.headers['X-CSRF-Token'] = response.json()['csrf_token']
@@ -123,20 +124,20 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((stats['signed'], stats['earned']), (1, 2.5))
         self.assertEqual((await self.client.get('/api/v1/accounts')).json()['items'][0]['last_balance']['earned'], 2.5)
 
-    async def test_branding_is_public_safe_persistent_and_in_backup(self):
+    async def test_branding_is_private_persistent_and_in_backup(self):
         branding = {'site_name': '我的签到工作空间', 'site_icon_text': '云签'}
         response = await self.client.put('/api/v1/settings/branding', json=branding)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(self.store.settings().proxy_mode, 'direct')
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url='http://testserver') as visitor:
-            self.assertEqual((await visitor.get('/api/v1/branding')).json(), branding)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url='https://testserver') as visitor:
+            self.assertEqual((await visitor.get('/api/v1/branding')).status_code, 401)
             self.assertEqual((await visitor.put('/api/v1/settings/branding', json=branding)).status_code, 401)
             icon = await visitor.get('/favicon.svg')
             self.assertEqual(icon.status_code, 200)
             self.assertIn('image/svg+xml', icon.headers['content-type'])
-            self.assertEqual(ElementTree.fromstring(icon.text).find('{http://www.w3.org/2000/svg}text').text, '云签')
+            self.assertEqual(ElementTree.fromstring(icon.text).find('{http://www.w3.org/2000/svg}text').text, '·')
         self.assertEqual((await self.client.get('/api/v1/auth/me')).json()['name'], branding['site_name'])
-        backup = (await self.client.post('/api/v1/backup')).json()
+        backup = await export_document(self.client)
         await self.client.put('/api/v1/settings/branding', json={'site_name': '暂时改名', 'site_icon_text': '<&'})
         icon = await self.client.get('/favicon.svg')
         self.assertEqual(ElementTree.fromstring(icon.text).find('{http://www.w3.org/2000/svg}text').text, '<&')
@@ -215,7 +216,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         identifier = account(self.store)
         now = time.time()
         self.store.execute("UPDATE accounts SET note='最新备注',quota=88,last_validated=?,last_extracted=?,updated=? WHERE id=?", (now, now, now, identifier))
-        backup = (await self.client.post('/api/v1/backup')).json()
+        backup = await export_document(self.client)
         old = backup['accounts'][0]
         old.update(password='old-password', note='旧备注', quota=1, validity='invalid', result={'session': 'old-cookie', 'api_user': '42'})
         for field in ('created', 'updated', 'last_extracted', 'last_validated'):
@@ -236,7 +237,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_restore_rejects_bad_documents_without_partial_changes(self):
         identifier = account(self.store)
-        original = (await self.client.post('/api/v1/backup')).json()
+        original = await export_document(self.client)
         variants = []
         for bad_balance in ('not-a-number', float('inf'), float('nan')):
             document = json.loads(json.dumps(original))
@@ -336,7 +337,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_backup_restore_keeps_measured_balances_and_is_idempotent(self):
         identifier = account(self.store)
         await self.perform(identifier)
-        backup = (await self.client.post('/api/v1/backup')).json()
+        backup = await export_document(self.client)
         self.assertEqual(backup['checkins'][0]['balance_source'], 'live')
         self.store.set_meta('queue_paused', '1')
         for attempt in range(2):
@@ -372,7 +373,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.store.execute('UPDATE accounts SET position=CASE WHEN id=? THEN 2 ELSE 1 END', (first,))
             return original_open(value, context)
         with patch.object(self.store.vault, 'open', side_effect=open_and_reorder):
-            document = (await self.client.post('/api/v1/backup')).json()
+            document = await export_document(self.client)
         self.assertEqual({item['username']: item['quota_after'] for item in document['checkins']}, {'first': 2, 'second': 20})
 
     async def test_maintenance_blocks_mutations_and_all_workers(self):
