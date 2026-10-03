@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/millylee/anyrouter-check-in",
+  "commit": "9f1394d0f5ccf687eb21a0307ef4ccd4e71ecd3a",
+  "source": "checkin.py",
+  "function": "execute_check_in",
+  "license": "BSD-2-Clause",
+  "integration": "The check-in function is vendored; our isolated runner adds strict response classification and does not invoke the upstream main, login, notification or WAF bypass paths."
+}

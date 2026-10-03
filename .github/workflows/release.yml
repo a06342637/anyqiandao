@@ -1,0 +1,44 @@
+name: Validate and publish release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: pip install -r requirements.txt
+      - run: python tools/verify_remote_backup.py
+      - run: npm install --global pnpm@11.19.0
+      - run: pnpm install --frozen-lockfile --ignore-scripts && pnpm run build
+        working-directory: frontend
+      - name: Validate tag and build archive
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+          fi
+          python scripts/build_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: .release/*
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" .release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" .release/* --title "$GITHUB_REF_NAME" --generate-notes
+          fi
