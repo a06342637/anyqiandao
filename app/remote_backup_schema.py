@@ -92,7 +92,8 @@ class RemoteBackupSettings(StrictModel):
     time: str = Field(default='04:30', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
     timezone: str = Field(default='Asia/Shanghai', max_length=64)
     mode: Literal['app', 'full'] = 'app'
-    encryption_password: str = Field(default='', max_length=1024)
+    # Read old saved settings without rejecting an upgrade; never expose or use it.
+    encryption_password: str = Field(default='', max_length=1024, exclude=True, repr=False)
     oss: OSSSettings = Field(default_factory=OSSSettings)
     sftp: SFTPSettings = Field(default_factory=SFTPSettings)
 

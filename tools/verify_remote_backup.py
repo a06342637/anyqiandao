@@ -21,7 +21,6 @@ import asyncssh
 import httpx
 from argon2 import PasswordHasher
 
-from tools.backup_fixture import PASSWORD, HEADERS
 from app.backup_targets import BackupError, OSSTarget, open_target, owned_backup
 from app.config import Config
 from app.main import create_app
@@ -42,7 +41,7 @@ class BackupTests(unittest.IsolatedAsyncioTestCase):
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url='https://testserver')
         response = await self.client.post('/api/v1/auth/login', json={'password': 'synthetic-admin-password'})
         self.client.headers['X-CSRF-Token'] = response.json()['csrf_token']
-        self.settings = RemoteBackupSettings(encryption_password=PASSWORD, oss=OSSSettings(enabled=True, bucket='synthetic-bucket',
+        self.settings = RemoteBackupSettings(oss=OSSSettings(enabled=True, bucket='synthetic-bucket',
                                              access_key_id='synthetic-id', access_key_secret='synthetic-oss-secret'))
 
     async def asyncTearDown(self):
@@ -114,7 +113,7 @@ class BackupTests(unittest.IsolatedAsyncioTestCase):
             await self.service.task
         self.assertEqual(self.service.state()['status'], 'success')
         self.assertFalse(list(self.config.data_dir.glob('.backup-*')))
-        response = await self.client.post('/api/v1/backup/restore', content=captured[0], headers=HEADERS)
+        response = await self.client.post('/api/v1/backup/restore', content=captured[0], headers={'Content-Type': 'application/zip'})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['accounts_updated'], 1)
         logs = (await self.client.get('/api/v1/logs?category=backup')).json()

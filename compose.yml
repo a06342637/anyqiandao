@@ -1,7 +1,7 @@
 name: any-signin-assistant
 services:
   app:
-    image: ${APP_IMAGE:-any-signin-assistant:0.5.0}
+    image: ${APP_IMAGE:-any-signin-assistant:0.5.1}
     build: .
     init: true
     restart: unless-stopped

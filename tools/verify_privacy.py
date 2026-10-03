@@ -1,7 +1,5 @@
 """Authentication, transport and backup confidentiality checks using synthetic data."""
 import asyncio
-import base64
-import io
 import json
 from pathlib import Path
 import sys
@@ -13,10 +11,10 @@ sys.path.insert(0, str(ROOT))
 
 import httpx
 
-from app.backup_encryption import MAGIC, decrypt_bytes, encrypt_bytes, encrypt_file
+from app.backup_encryption import decrypt_bytes, encrypt_bytes, encrypt_file
 from app.config import Config
 from app.main import create_app
-from tools.backup_fixture import PASSWORD, HEADERS
+from tools.backup_fixture import PASSWORD
 from tools import verify_remote_backup as backup_tests
 from tools.verify_v3 import account
 
@@ -85,23 +83,30 @@ class PrivacyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.client.get(path)).status_code, 401)
         self.assertNotIn('/assets/', (await self.client.get('/')).text)
 
-    async def test_encrypted_export_wrong_password_and_tampering(self):
+    async def test_json_export_and_restore_need_no_backup_password(self):
         account(self.store, username='private-backup-account', password='private-fixture-password')
-        self.assertEqual((await self.client.post('/api/v1/backup')).status_code, 422)
-        response = await self.client.post('/api/v1/backup', json={'passphrase': PASSWORD})
+        response = await self.client.post('/api/v1/backup')
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.content.startswith(MAGIC))
-        self.assertIn('.asb', response.headers['content-disposition'])
-        for value in (b'private-backup-account', b'private-fixture-password', PASSWORD.encode()):
-            self.assertNotIn(value, response.content)
-        wrong = {'X-Backup-Password': base64.b64encode(b'wrong-test-password').decode()}
-        self.assertEqual((await self.client.post('/api/v1/backup/restore', content=response.content, headers=wrong)).status_code, 400)
-        tampered = response.content[:-1] + bytes([response.content[-1] ^ 1])
-        self.assertEqual((await self.client.post('/api/v1/backup/restore', content=tampered, headers=HEADERS)).status_code, 400)
-        self.assertEqual((await self.client.post('/api/v1/backup/restore', content=response.content, headers=HEADERS)).status_code, 200)
+        self.assertIn('.json', response.headers['content-disposition'])
+        self.assertEqual(response.headers['cache-control'], 'no-store')
+        self.assertEqual(response.json()['accounts'][0]['password'], 'private-fixture-password')
+        restored = await self.client.post('/api/v1/backup/restore', json=response.json())
+        self.assertEqual(restored.status_code, 200)
         stored = self.store.all('SELECT login_enc,result_enc FROM accounts')
         self.assertNotIn('private-fixture-password', json.dumps(stored))
         self.assertNotIn('private-backup-account', json.dumps(stored))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url='https://testserver') as visitor:
+            self.assertEqual((await visitor.post('/api/v1/backup')).status_code, 401)
+            self.assertEqual((await visitor.post('/api/v1/backup/restore', json=response.json())).status_code, 401)
+
+    async def test_legacy_asb_has_a_clear_conversion_error_without_changes(self):
+        account(self.store)
+        before = self.store.all('SELECT * FROM accounts')
+        legacy = encrypt_bytes(b'{"app":"any-signin-assistant","format":1}', PASSWORD)
+        response = await self.client.post('/api/v1/backup/restore', content=legacy)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('scripts/decrypt_backup.py', response.json()['detail'])
+        self.assertEqual(self.store.all('SELECT * FROM accounts'), before)
 
     async def test_encryption_is_random_and_streaming_format_is_compatible(self):
         body = b'synthetic confidential data' * 1000
@@ -115,24 +120,25 @@ class PrivacyTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             decrypt_bytes(b'not an encrypted archive', PASSWORD)
 
-    async def test_old_automatic_backup_requires_encryption_before_uploading(self):
+    async def test_automatic_backup_does_not_require_encryption_password(self):
         self.settings.enabled = True
-        self.settings.encryption_password = ''
-        self.store.set_meta('remote_backup_config', self.store.vault.seal(self.settings.model_dump(), 'remote_backup_config'))
+        self.service.save(self.settings)
         await self.service.start()
-        self.assertFalse(self.service.settings().enabled)
-        self.assertIn('备份密码', self.service.state()['result'])
-        self.assertIsNone(self.service.state()['next_run'])
+        self.assertTrue(self.service.settings().enabled)
+        self.assertGreater(self.service.state()['next_run'], 0)
         self.assertIsNone(self.service.task)
 
-    async def test_saved_encryption_password_is_not_returned_or_exported(self):
-        result = self.service.save(self.settings)
-        self.assertTrue(result['settings']['has_encryption_password'])
+    async def test_legacy_password_settings_load_and_are_omitted_on_save(self):
+        old = self.settings.model_dump() | {'encryption_password': PASSWORD}
+        self.store.set_meta('remote_backup_config', self.store.vault.seal(old, 'remote_backup_config'))
+        result = self.service.public()
+        self.assertNotIn('encryption_password', result['settings'])
+        self.assertNotIn('has_encryption_password', result['settings'])
         self.assertNotIn(PASSWORD, json.dumps(result))
-        self.assertNotIn(PASSWORD, self.store.meta('remote_backup_config'))
-        self.settings.encryption_password = ''
-        self.service.save(self.settings)
-        self.assertEqual(self.service.settings().encryption_password, PASSWORD)
+        self.service.save(self.service.settings())
+        saved = self.store.vault.open(self.store.meta('remote_backup_config'), 'remote_backup_config')
+        self.assertNotIn('encryption_password', saved)
+        self.assertEqual(saved['oss']['access_key_secret'], self.settings.oss.access_key_secret)
 
 
 if __name__ == '__main__':

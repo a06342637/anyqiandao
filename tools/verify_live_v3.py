@@ -72,12 +72,9 @@ with httpx.Client(base_url=values.get('访问地址', 'https://signin.example.co
         time.sleep(2)
     assert updates['updater_available'], 'Updater heartbeat unavailable'
     report['updates'] = {'available': updates['updater_available'], 'source_configured': bool(updates['repository'])}
-    import secrets
-    from app.backup_encryption import decrypt_bytes
-    backup_password = secrets.token_urlsafe(24)
-    backup = client.post('/api/v1/backup', json={'passphrase': backup_password})
+    backup = client.post('/api/v1/backup')
     backup.raise_for_status()
-    document = json.loads(decrypt_bytes(backup.content, backup_password))
+    document = backup.json()
     assert len(document['accounts']) == accounts['total'] and document['schema_version'] == SCHEMA_VERSION
     assert all('balance_source' in item for item in document['checkins'])
     assert document['settings']['site_name'] == branding.json()['site_name']

@@ -1,4 +1,4 @@
-"""Synthetic password and helpers for testing encrypted backup round trips."""
+"""Helpers for backup round trips and compatibility with old encrypted files."""
 import base64
 import json
 
@@ -9,6 +9,6 @@ HEADERS = {'X-Backup-Password': base64.b64encode(PASSWORD.encode()).decode()}
 
 
 async def export_document(client):
-    response = await client.post('/api/v1/backup', json={'passphrase': PASSWORD})
+    response = await client.post('/api/v1/backup')
     assert response.status_code == 200, response.text
-    return json.loads(decrypt_bytes(response.content, PASSWORD))
+    return response.json()
