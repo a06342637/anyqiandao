@@ -208,6 +208,12 @@ def extract_source(archive, destination, expected_version):
                 with source.extractfile(member) as content, target.open('xb') as output:
                     output.write(content.read())
                 target.chmod(0o644)
+    # The updater runs with UMask=0077. Docker COPY preserves nested directory
+    # modes, so source directories must remain readable by the container's
+    # unprivileged application user. The outer staging directory stays private.
+    for directory in destination.rglob('*'):
+        if directory.is_dir():
+            directory.chmod(0o755)
     required = ('.project-id', 'VERSION', 'Dockerfile', 'compose.yml', 'requirements.txt', 'app/main.py', 'frontend/package.json')
     if any(not (destination / name).is_file() for name in required):
         raise UpdateError('发布包缺少必要的项目文件')

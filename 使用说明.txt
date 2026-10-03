@@ -1,4 +1,4 @@
-any签到助手 v0.4.0 使用说明
+any签到助手 v0.4.1 使用说明
 
 部署入口：将项目源码上传到 Ubuntu 22.04+ / Debian 12+，在项目目录运行 sudo bash scripts/deploy.sh。
 脚本自动安装缺少的 Docker / Compose / Python。端口回车随机空闲值，用户名回车 admin，密码回车生成随机强密码。

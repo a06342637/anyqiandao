@@ -1,4 +1,4 @@
-# any签到助手 v0.4.0
+# any签到助手 v0.4.1
 
 私有部署的 AnyRouter 凭证提取、账号检测与自动签到工作空间。React / TypeScript / Vite 前端，FastAPI / Playwright / SQLite 后端。
 

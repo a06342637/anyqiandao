@@ -18,6 +18,7 @@ jobs:
           node-version: '24'
       - run: pip install -r requirements.txt
       - run: python tools/verify_remote_backup.py
+      - run: python tools/verify_release_permissions.py
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile --ignore-scripts && pnpm run build
         working-directory: frontend
@@ -28,17 +29,31 @@ jobs:
             test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
           fi
           python scripts/build_release.py
+      - name: Build and smoke-test extracted release as container user
+        shell: bash
+        run: |
+          umask 077
+          python - <<'PY'
+          from pathlib import Path
+          from app.update_common import extract_source
+          version = Path('VERSION').read_text().strip()
+          extract_source(Path('.release') / f'any-signin-assistant-v{version}.tar.gz', '.release/smoke-source', version)
+          PY
+          docker build -t anyqiandao:release-check .release/smoke-source
+          docker run --rm --network none --read-only --tmpfs /tmp:size=67108864 --entrypoint python anyqiandao:release-check -c 'from app.main import create_app; from app.config import Config; from argon2 import PasswordHasher; from pathlib import Path; app=create_app(Config(bytes(range(32)), PasswordHasher().hash("synthetic-image-check"), Path("/tmp/check"), start_worker=False)); print("App initialized", app.version)'
       - uses: actions/upload-artifact@v4
         with:
           name: release-package
-          path: .release/*
+          path: |
+            .release/*.tar.gz
+            .release/release.json
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" .release/* --clobber
+            gh release upload "$GITHUB_REF_NAME" .release/*.tar.gz .release/release.json --clobber
           else
-            gh release create "$GITHUB_REF_NAME" .release/* --title "$GITHUB_REF_NAME" --generate-notes
+            gh release create "$GITHUB_REF_NAME" .release/*.tar.gz .release/release.json --title "$GITHUB_REF_NAME" --generate-notes
           fi
