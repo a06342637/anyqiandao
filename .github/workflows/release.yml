@@ -20,6 +20,7 @@ jobs:
       - run: python tools/verify_source_privacy.py
       - run: python tools/verify_remote_backup.py
       - run: python tools/verify_privacy.py
+      - run: python tools/verify_reverse_proxy.py
       - run: python tools/verify_release_permissions.py
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile --ignore-scripts && pnpm run build
@@ -47,9 +48,10 @@ jobs:
         shell: bash
         run: |
           trap 'docker rm -f anyqiandao-readiness-check >/dev/null 2>&1 || true' EXIT
-          docker run -d --name anyqiandao-readiness-check --read-only --tmpfs /tmp:size=67108864 -p 127.0.0.1:19888:8000 --entrypoint python anyqiandao:release-check -c 'import uvicorn; from app.main import create_app; from app.config import Config; from argon2 import PasswordHasher; from pathlib import Path; app=create_app(Config(bytes(range(32)), PasswordHasher().hash("synthetic-image-check"), Path("/tmp/check"), "https://example.invalid", start_worker=False)); uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False, proxy_headers=False)'
+          docker run -d --name anyqiandao-readiness-check --read-only --tmpfs /tmp:size=67108864 -p 127.0.0.1:19888:8000 --entrypoint python anyqiandao:release-check -c 'import uvicorn; from app.main import create_app; from app.config import Config; from argon2 import PasswordHasher; from pathlib import Path; app=create_app(Config(bytes(range(32)), PasswordHasher().hash("synthetic-image-check"), Path("/tmp/check"), "http://127.0.0.1:19888", start_worker=False)); uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False, proxy_headers=False)'
           python - <<'PY'
           import json, time, urllib.request
+          from http.cookies import SimpleCookie
           from pathlib import Path
           for attempt in range(30):
               try:
@@ -68,6 +70,19 @@ jobs:
               page = response.read().decode()
               assert '管理员登录' in page and '/assets/' not in page
           print('Old updater health checks and public metadata isolation passed.')
+          tunnel_headers = {'Host': 'tunnel.example.invalid', 'Origin': 'https://tunnel.example.invalid',
+                            'X-Forwarded-Proto': 'https', 'CF-Visitor': '{"scheme":"https"}', 'Content-Type': 'application/json'}
+          request = urllib.request.Request('http://127.0.0.1:19888/api/v1/auth/login',
+                      data=json.dumps({'password': 'synthetic-image-check'}).encode(), headers=tunnel_headers)
+          with urllib.request.urlopen(request, timeout=5) as response:
+              cookies = SimpleCookie(response.headers['Set-Cookie'])
+              assert cookies['any_assistant_session']['secure']
+              assert response.headers['Strict-Transport-Security']
+          tunnel_headers['Cookie'] = 'any_assistant_session=' + cookies['any_assistant_session'].value
+          request = urllib.request.Request('http://127.0.0.1:19888/api/v1/auth/me', headers=tunnel_headers)
+          with urllib.request.urlopen(request, timeout=5) as response:
+              assert json.load(response)['username'] == 'admin'
+          print('Tunnel HTTPS, same-origin authentication and Secure cookie checks passed.')
           PY
       - uses: actions/upload-artifact@v4
         with:

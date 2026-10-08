@@ -77,7 +77,8 @@ def create_archive(store, config, mode, directory, name):
             archive.writestr('secrets/admin.hash', config.admin_hash + '\n')
             # Only known deployment fields: no arbitrary environment variables or remote backup secrets.
             archive.writestr('.env', f'APP_PUBLIC_URL={config.public_url}\nAPP_ADMIN_USERNAME={config.admin_username}\n'
-                             f'APP_IMAGE=any-signin-assistant:{VERSION}\nAPP_ALLOW_INSECURE_HTTP={int(not config.cookie_secure)}\n')
+                             f'APP_IMAGE=any-signin-assistant:{VERSION}\nAPP_ALLOW_INSECURE_HTTP={int(not config.cookie_secure)}\n'
+                             f'APP_TRUSTED_PROXY_IPS={",".join(config.trusted_proxy_ips) or "none"}\n')
             for file, relative in source_files(ROOT):
                 archive.write(file, relative)
             instructions += ('\n完整恢复：先停止应用，将 ZIP 解压到独立目录。保留 data/、secrets/ 和 .env，'

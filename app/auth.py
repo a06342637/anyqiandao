@@ -8,6 +8,7 @@ from collections import defaultdict, deque
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from fastapi import HTTPException, Request
+from app.security import canonical_origin, request_origin
 
 COOKIE_NAME = 'any_assistant_session'
 
@@ -24,7 +25,7 @@ class Auth:
         if request.headers.get('sec-fetch-site') == 'cross-site':
             raise HTTPException(403, '请求来源不匹配')
         origin = request.headers.get('origin')
-        if origin and origin.rstrip('/') != self.config.public_url:
+        if origin and (not canonical_origin(origin) or canonical_origin(origin) != request_origin(request, self.config)):
             raise HTTPException(403, '请求来源不匹配')
 
     def csrf(self, token):

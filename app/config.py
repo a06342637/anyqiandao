@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from argon2 import extract_parameters
 from dotenv import load_dotenv
+from app.security import DEFAULT_TRUSTED_PROXIES, proxy_sources
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
@@ -34,6 +35,7 @@ class Config:
     start_worker: bool = True
     admin_username: str = 'admin'
     update_dir: Path | None = None
+    trusted_proxy_ips: tuple[str, ...] = DEFAULT_TRUSTED_PROXIES
 
     @classmethod
     def from_env(cls):
@@ -57,6 +59,10 @@ class Config:
         username = os.environ.get('APP_ADMIN_USERNAME', 'admin')
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}', username):
             raise RuntimeError('管理员账号必须为 1–64 位字母、数字或 _.@-，并以字母或数字开头')
+        try:
+            proxies = proxy_sources(os.environ.get('APP_TRUSTED_PROXY_IPS', ','.join(DEFAULT_TRUSTED_PROXIES)))
+        except ValueError as error:
+            raise RuntimeError(str(error)) from None
         return cls(key, admin_hash, Path(os.environ.get('APP_DATA_DIR', str(ROOT / 'data'))),
                    public_url, parsed.scheme == 'https', os.environ.get('APP_START_WORKER', '1') != '0', username,
-                   Path(os.environ['APP_UPDATE_DIR']) if os.environ.get('APP_UPDATE_DIR') else None)
+                   Path(os.environ['APP_UPDATE_DIR']) if os.environ.get('APP_UPDATE_DIR') else None, proxies)

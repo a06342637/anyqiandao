@@ -1,8 +1,8 @@
-# any签到助手 v0.5.1
+# any签到助手 v0.5.2
 
 私有部署的 AnyRouter 凭证提取、账号检测与自动签到工作空间。React / TypeScript / Vite 前端，FastAPI / Playwright / SQLite 后端。
 
-v0.5.1 起，未登录仅显示登录页；公网管理访问必须使用 HTTPS，无域名时通过 SSH 隧道访问。备份和恢复无需额外密码：手动导出 JSON，远程备份生成 ZIP。升级前请阅读 [安全与隐私说明](docs/安全与隐私.md)。
+v0.5.2 起，未登录仅显示登录页；公网管理访问必须使用 HTTPS，无域名时通过 SSH 隧道访问。备份和恢复无需额外密码：手动导出 JSON，远程备份生成 ZIP。升级前请阅读 [安全与隐私说明](docs/安全与隐私.md)。
 
 ## 功能
 
@@ -128,6 +128,12 @@ bash scripts/deploy.sh https://你的域名
 4. **配置备份**：进入“设置 → 远程自动备份”，填写 OSS 或 SSH/SFTP 配置，保存后测试连接。先执行一次“立即备份”，确认成功后开启总开关和计划。详见 [远程备份说明](docs/远程自动备份.md)。
 5. **设置日志保留**：在“运行日志 → 日志保留”调整保留天数和自动清理间隔；备份日志可按“备份”分类筛选，并一起清理。
 
+### Cloudflare Tunnel 反代
+
+Tunnel 的服务地址可以保持 `http://127.0.0.1:8001`（端口使用实际应用端口）。v0.5.2 支持自动识别本机 cloudflared 的 HTTPS 转发，登录、来源校验和 Secure Cookie 会使用浏览器实际的 HTTPS 域名。
+
+如果旧版仍显示“需要安全连接”，先在 `.env` 设置实际公网 HTTPS 的 `APP_PUBLIC_URL`，保持 `APP_ENABLE_HTTPS_PROXY=0`，然后重新创建 app 容器，再从网页升级。完整步骤与独立容器代理配置见 [Cloudflare Tunnel 说明](docs/Cloudflare-Tunnel.md)。
+
 ### 以后怎么更新
 
 优先在网页打开“设置 → 版本更新”，点击“检测版本”，确认后更新。默认仓库是 `a06342637/anyqiandao`，也可自定义可信仓库。程序会先构建，再备份源码、数据与密钥，切换后检查健康，失败自动回滚。
@@ -198,6 +204,7 @@ python tools/verify_v035.py
 python tools/verify_v036.py
 python tools/verify_remote_backup.py
 python tools/verify_privacy.py
+python tools/verify_reverse_proxy.py
 python tools/verify_source_privacy.py
 python tools/verify_deploy.py
 python tools/verify_source_export.py

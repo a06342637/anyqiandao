@@ -1,7 +1,7 @@
 name: any-signin-assistant
 services:
   app:
-    image: ${APP_IMAGE:-any-signin-assistant:0.5.1}
+    image: ${APP_IMAGE:-any-signin-assistant:0.5.2}
     build: .
     init: true
     restart: unless-stopped
@@ -14,6 +14,7 @@ services:
       APP_ALLOW_INSECURE_HTTP: ${APP_ALLOW_INSECURE_HTTP:-0}
       APP_UPDATE_DIR: /run/assistant-update
       APP_UPDATE_REPOSITORY: ${APP_UPDATE_REPOSITORY:-a06342637/anyqiandao}
+      APP_TRUSTED_PROXY_IPS: ${APP_TRUSTED_PROXY_IPS:-127.0.0.1,::1,gateway}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-18780}:8000"
     volumes:

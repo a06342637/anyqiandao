@@ -21,7 +21,7 @@ from app.console_api import console_router
 from app.update_api import update_router
 from app.remote_backup import RemoteBackup
 from app.remote_backup_api import remote_backup_router
-from app.security import secure_transport, local_health_probe
+from app.security import secure_transport, local_health_probe, uses_https
 from app.login_page import login_page, login_script
 
 
@@ -101,7 +101,7 @@ def create_app(config=None, service=None):
         response.headers['Vary'] = 'Cookie'
         response.headers['X-Robots-Tag'] = 'noindex, nofollow'
         response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
-        if config.public_url.startswith('https://'):
+        if uses_https(request, config):
             response.headers['Strict-Transport-Security'] = 'max-age=31536000'
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         return response
@@ -131,7 +131,7 @@ def create_app(config=None, service=None):
     async def login(request: Request, payload: LoginInput):
         token = await auth.login(request, payload.password, payload.username)
         response = JSONResponse({'csrf_token': auth.csrf(token)})
-        response.set_cookie(COOKIE_NAME, token, httponly=True, secure=config.cookie_secure or config.public_url.startswith('https://'), samesite='strict', max_age=86400, path='/')
+        response.set_cookie(COOKIE_NAME, token, httponly=True, secure=config.cookie_secure or uses_https(request, config), samesite='strict', max_age=86400, path='/')
         return response
 
     @app.get('/api/v1/auth/me')
@@ -148,10 +148,10 @@ def create_app(config=None, service=None):
         return Response(favicon_svg(text), media_type='image/svg+xml')
 
     @app.post('/api/v1/auth/logout')
-    def logout(token=Depends(auth.require)):
+    def logout(request: Request, token=Depends(auth.require)):
         auth.logout(token)
         response = JSONResponse({'ok': True})
-        response.delete_cookie(COOKIE_NAME, path='/', secure=config.cookie_secure or config.public_url.startswith('https://'), httponly=True, samesite='strict')
+        response.delete_cookie(COOKIE_NAME, path='/', secure=config.cookie_secure or uses_https(request, config), httponly=True, samesite='strict')
         response.headers['Clear-Site-Data'] = '"cache", "storage"'
         return response
 
