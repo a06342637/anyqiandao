@@ -70,12 +70,14 @@ class FakeService:
 
 
 async def wait_empty(store):
-    for attempt in range(4000):
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
         count = store.one("SELECT COUNT(*) AS count FROM jobs WHERE status IN ('pending','running')")['count']
         if not count:
             return
         await asyncio.sleep(0.02)
-    raise AssertionError('Queue did not drain')
+    remaining = store.all("SELECT kind,status,COUNT(*) AS count FROM jobs WHERE status IN ('pending','running') GROUP BY kind,status")
+    raise AssertionError(f'Queue did not drain: {remaining}; paused={store.meta("queue_paused")}')
 
 
 async def verify():

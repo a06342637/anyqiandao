@@ -132,9 +132,12 @@ class Engine:
                 if not job:
                     await asyncio.sleep(0.5)
                     continue
-                self.running[job['id']] = (job, asyncio.create_task(self.run_job(job)))
+                task = asyncio.create_task(self.run_job(job))
+                self.running[job['id']] = (job, task)
                 last_started = time.monotonic()
-                await asyncio.sleep(0)
+                # The queue is globally serial. Wake on actual completion,
+                # including browser cleanup, instead of polling a busy slot.
+                await asyncio.wait({task})
             except asyncio.CancelledError:
                 raise
             except sqlite3.Error:
