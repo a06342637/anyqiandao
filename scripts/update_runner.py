@@ -133,10 +133,21 @@ class Updater:
         while time.monotonic() < deadline:
             with contextlib.closing(self.database()) as connection:
                 running = connection.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0]
-            if not running:
+                backup = connection.execute("SELECT value FROM meta WHERE key='remote_backup_state'").fetchone()
+                backing_up = bool(backup and json.loads(backup[0]).get('running'))
+            if not running and not backing_up:
                 return
             time.sleep(2)
-        raise common.UpdateError('当前任务在十分钟内未结束，取消本次更新，不会强行中断签到')
+        raise common.UpdateError('当前账号任务或备份在十分钟内未结束，取消本次更新，不会强行中断')
+
+    def check_build_memory(self):
+        try:
+            memory = {line.split(':')[0]: int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()}
+        except (OSError, ValueError, IndexError):
+            return
+        available, swap = memory.get('MemAvailable', 0), memory.get('SwapFree', 0)
+        if available < 256 * 1024 or available + swap < 768 * 1024:
+            raise common.UpdateError('可用内存不足以安全构建镜像；请释放内存或配置至少 1GB Swap 后重试，原服务和数据保留')
 
     def resume(self):
         previous = self.context.get('previous_queue')
@@ -292,10 +303,11 @@ class Updater:
                 stage = work / 'source'
                 common.extract_source(archive, stage, version)
                 image = f'{common.APP_ID}:{version}-{request["id"][:12]}'
-                self.transition('building', '构建新版本镜像，当前服务继续运行；小型服务器可能需要十几分钟', 25)
-                self.execute(['docker', 'build', '-t', image, str(stage)], timeout=3600)
-                self.transition('draining', '暂停新任务，等待当前任务自然完成', 65)
+                self.transition('draining', '构建前暂停新任务，等待账号任务与远程备份完成', 20)
                 self.pause()
+                self.check_build_memory()
+                self.transition('building', '任务与备份已暂停，正在构建镜像；网页可继续查看状态', 25)
+                self.execute(['docker', 'build', '-t', image, str(stage)], timeout=3600)
                 self.transition('backing_up', '备份源码、数据库、密钥和部署配置', 72)
                 self.context['app_stopped'] = True
                 self.save_context()

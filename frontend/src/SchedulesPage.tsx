@@ -4,7 +4,7 @@ import { api, formatTime, refreshData, useResource } from './api';
 import { Button, EmptyState, ErrorNotice, Modal, Pagination, RefreshButton, useConfirm, usePageClamp, usePageSize, useToast, useTrack } from './ui';
 import { AccountPicker } from './selection';
 import { AccountCheckinRouting, RouteSelect } from './NetworkRouting';
-import type { NetworkRoute, PageData, ProxyNode, Schedule, Selection } from './types';
+import type { NetworkRoute, PageData, ProxyOption, Schedule, Selection } from './types';
 
 export default function SchedulesPage({ timezone, onLogs }: { timezone: string; onLogs: () => void }) {
   const toast = useToast();
@@ -39,7 +39,7 @@ function ScheduleEditor({ schedule, onClose }: { schedule: Schedule | null; onCl
   const toast = useToast();
   const [name, setName] = useState(schedule?.name || '每日签到');
   const [networkRoute, setNetworkRoute] = useState<NetworkRoute>(schedule?.network_route || { mode: 'inherit' });
-  const nodes = useResource<PageData<ProxyNode>>('/proxies?limit=100', 0);
+  const nodes = useResource<{ items: ProxyOption[] }>('/proxies/options', 0);
   const initialMinutes = schedule?.interval_minutes || 1440;
   const [unit, setUnit] = useState(initialMinutes % 60 === 0 ? 60 : 1);
   const [interval, setInterval] = useState(initialMinutes % 60 === 0 ? initialMinutes / 60 : initialMinutes);

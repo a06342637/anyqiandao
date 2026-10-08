@@ -7,7 +7,7 @@ from datetime import datetime
 import httpx
 
 from app.config import TARGET_ORIGIN
-from app.checkin_state import BEIJING, beijing_day, confirmed_today, fixed_reward
+from app.checkin_state import BEIJING, beijing_day, confirmed_today, submitted_today, fixed_reward
 from app.db import checkin_earned
 from app.errors import HostKeyRequired, TaskError
 from app.proxy import ProxyBridge, detect_protocol
@@ -27,6 +27,7 @@ class Engine:
         self.running = {}
         self.storage_error = False
         self.resource_wait = ''
+        self.resource_lock = asyncio.Lock()
         self.loop = None
         self.lock = WorkerLock(store.path.parent / '.worker.lock')
 
@@ -128,16 +129,17 @@ class Engine:
                 if gap > 0:
                     await asyncio.sleep(min(0.25, gap))
                     continue
-                job = self.claim()
+                async with self.resource_lock:
+                    if not memory_status()['ready']:
+                        continue
+                    job = self.claim()
+                    if job:
+                        task = asyncio.create_task(self.run_job(job))
+                        self.running[job['id']] = (job, task)
+                        last_started = time.monotonic()
+                        await asyncio.wait({task})
                 if not job:
                     await asyncio.sleep(0.5)
-                    continue
-                task = asyncio.create_task(self.run_job(job))
-                self.running[job['id']] = (job, task)
-                last_started = time.monotonic()
-                # The queue is globally serial. Wake on actual completion,
-                # including browser cleanup, instead of polling a busy slot.
-                await asyncio.wait({task})
             except asyncio.CancelledError:
                 raise
             except sqlite3.Error:
@@ -155,7 +157,7 @@ class Engine:
         except asyncio.CancelledError:
             if self.stopping:
                 raise
-            uncertain = job['kind'] == 'checkin' and job.get('_checkin_started')
+            uncertain = job['kind'] == 'checkin' and job.get('_checkin_submitted')
             self.finish(job, 'uncertain' if uncertain else 'cancelled',
                         '已取消；签到是否已提交需人工确认，不自动重发' if uncertain else '任务已取消')
         except sqlite3.Error:
@@ -188,6 +190,11 @@ class Engine:
             await self.perform(job, account, password, None, settings, None)
 
         except TaskError as error:
+            if error.code == 'resource_busy' and not job.get('_checkin_submitted'):
+                self.resource_wait = '内存暂时不足，任务保留在队列，资源释放后自动继续'
+                self.store.execute("UPDATE jobs SET status='pending',started=NULL,message=? WHERE id=? AND status='running'", (self.resource_wait, job['id']))
+                self.log_job(job, self.resource_wait, level='warning')
+                return
             if job['account_id']:
                 now = time.time()
                 if job['kind'] == 'insights':
@@ -372,6 +379,8 @@ class Engine:
             except TaskError as error:
                 if error.code != 'invalid' or refreshed:
                     raise
+                if job.get('_submission_at'):
+                    self.store.clear_rejected_submission(account['id'], job['_submission_at'])
                 job['_checkin_started'] = False
                 job['_checkin_submitted'] = False
                 await self.refresh_for_checkin(job, account, password, route, settings, proxy_id)
@@ -394,15 +403,21 @@ class Engine:
 
     async def checkin_or_observed(self, job, account, route, settings):
         state = self.store.daily_state(self.store.account(account['id']))
-        if confirmed_today(state, account['result']['api_user'], time.time()):
+        if confirmed_today(state, account['result']['api_user'], time.time()) or submitted_today(state, account['result']['api_user'], time.time()):
             result = await self.service.validate(account['result'], route, settings)
             observed = self.checkin_precheck(account, result.get('quota'), quota_of(result.get('profile') or {}, 'used_quota'), time.time())
             if observed:
                 return observed
+            if submitted_today(self.store.daily_state(self.store.account(account['id'])), account['result']['api_user'], time.time()):
+                raise TaskError('uncertain', '今天的签到已提交，本轮只读复核仍无明确到账依据；当天不重复提交')
         job['_checkin_started'] = True
         return await self.service.checkin(account['result'], route, settings,
                     before_submit=lambda profile, observed_at: self.checkin_precheck(account, quota_of(profile), quota_of(profile, 'used_quota'), observed_at),
-                    on_submit=lambda: job.update(_checkin_submitted=True))
+                    on_submit=lambda: self.mark_submitted(job, account))
+
+    def mark_submitted(self, job, account):
+        at = self.store.mark_submission(account['id'], account['result']['api_user'])
+        job.update(_checkin_submitted=True, _submission_at=at)
 
     def checkin_precheck(self, account, quota, used, now):
         identity = account['result']['api_user']

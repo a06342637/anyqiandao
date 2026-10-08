@@ -42,6 +42,7 @@ export interface ProxyNode {
   username: string; has_password: boolean; status: string; message: string; latency: number | null;
   tested_at: number | null; candidate_fingerprint: string | null; trusted: boolean;
 }
+export type ProxyOption = Pick<ProxyNode, 'id' | 'name' | 'enabled' | 'scheme'>;
 export interface SiteBranding { site_name: string; site_icon_text: string; }
 export interface RuntimeSettings extends SiteBranding {
   operation_routes: OperationRoutes;

@@ -20,7 +20,7 @@ jobs:
       - name: Verify global serial execution, routes and account regressions
         run: |
           python tools/verify_backend.py
-          python -m unittest tools.verify_serial_routes tools.verify_queue tools.verify_v3 tools.verify_v033 tools.verify_v034 tools.verify_v035 tools.verify_v036
+          python -m unittest tools.verify_serial_routes tools.verify_queue tools.verify_v3 tools.verify_v033 tools.verify_v034 tools.verify_v035 tools.verify_v036 tools.verify_v062
       - run: python tools/verify_source_privacy.py
       - run: python tools/verify_remote_backup.py
       - run: python tools/verify_privacy.py

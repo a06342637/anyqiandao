@@ -21,6 +21,7 @@ class DailyCheckinState(BaseModel):
     used_quota: float | None = None
     confirmed_at: float | None = Field(default=None, ge=0, le=253402300799)
     last_signed_at: float | None = Field(default=None, ge=0, le=253402300799)
+    submitted_at: float | None = Field(default=None, ge=0, le=253402300799)
     evidence: Literal['', 'balance_25', 'receipt', 'history'] = ''
 
 
@@ -64,6 +65,11 @@ def confirmed_today(state, api_user, now):
                 and beijing_day(state.confirmed_at) == state.day and state.evidence)
 
 
+def submitted_today(state, api_user, now):
+    return bool(valid_observation(state, api_user, now) and state.submitted_at is not None
+                and state.submitted_at <= now and beijing_day(state.submitted_at) == beijing_day(now))
+
+
 def merge_daily_state(previous, incoming, api_user, now):
     candidates = [state for state in (previous, incoming) if valid_observation(state, api_user, now)]
     if not candidates:
@@ -83,6 +89,8 @@ def merge_daily_state(previous, incoming, api_user, now):
     if confirmed:
         signed_times.append(confirmed.confirmed_at)
     state.last_signed_at = max(signed_times, default=None)
+    submissions = [item.submitted_at for item in candidates if submitted_today(item, api_user, now)]
+    state.submitted_at = min(submissions, default=None)
     return state
 
 
@@ -100,6 +108,8 @@ def observe_balance(previous, api_user, quota, used_quota, now, *, confirm=False
         quota, used_quota = previous.quota, previous.used_quota
     state = DailyCheckinState(api_user=identity, day=day, observed_at=now, quota=quota, used_quota=used_quota,
                              last_signed_at=previous.last_signed_at if previous and (previous.last_signed_at or 0) <= now else None)
+    if submitted_today(previous, identity, now):
+        state.submitted_at = previous.submitted_at
     if confirmed_today(previous, identity, now):
         state.confirmed_at, state.evidence = previous.confirmed_at, previous.evidence
     elif confirm or fixed_reward(gain):

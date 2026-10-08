@@ -80,7 +80,7 @@ function BackupForm({ data, reload }: { data: BackupData; reload: () => Promise<
     <div className="backup-overview" aria-live="polite">
       <div><small>下次备份</small><strong>{data.settings.enabled ? formatTime(data.state.next_run, data.settings.timezone) : '自动备份已关闭'}</strong></div>
       <div><small>上次备份</small><strong>{formatTime(data.state.last_run, data.settings.timezone)}{data.state.last_run ? `（${data.state.source === 'scheduled' ? '定时' : '手动'}）` : ''}</strong></div>
-      <div><small>执行结果</small><strong className={`backup-result ${data.state.status || ''}`}>{data.state.running ? '正在备份…' : data.state.result || '尚未执行'}</strong></div>
+      <div><small>执行结果</small><strong className={`backup-result ${data.state.status || ''}`}>{data.state.result || (data.state.running ? '正在备份…' : '尚未执行')}</strong></div>
       <Button variant="primary" type="button" busy={data.state.running || busy === 'run'} disabled={disabled || dirty || !(settings.oss.enabled || settings.sftp.enabled)} onClick={run}><Upload size={15} />立即备份</Button>
     </div>
     <fieldset className="backup-plan" disabled={disabled}>

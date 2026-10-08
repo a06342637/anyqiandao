@@ -7,10 +7,11 @@ from contextlib import contextmanager
 from decimal import Decimal
 
 from app.crypto import Vault
-from app.checkin_state import DailyCheckinState, observe_balance
+from app.checkin_state import DailyCheckinState, observe_balance, submitted_today, beijing_day
+from app.errors import TaskError
 from app.schemas import RuntimeSettings
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def checkin_earned(row):
@@ -182,6 +183,19 @@ class Store:
                 settings['max_concurrency'] = settings['checkin_concurrency'] = 1
                 settings['proxy_mode'] = 'direct'
                 connection.execute("UPDATE meta SET value=? WHERE key='settings'", (RuntimeSettings.model_validate(settings).model_dump_json(),))
+            if version < 10:
+                # Older versions did not persist the submission marker. Protect
+                # today's unresolved/interrupted jobs conservatively on upgrade.
+                now = time.time()
+                for row in connection.execute("SELECT * FROM accounts WHERE result_enc IS NOT NULL").fetchall():
+                    unresolved = connection.execute("SELECT COALESCE(started,created) AS at FROM jobs WHERE account_id=? AND kind='checkin' AND status IN ('uncertain','running') ORDER BY created DESC LIMIT 1", (row['id'],)).fetchone()
+                    at = max((row['last_checkin'] or 0) if row['checkin_status'] == 'uncertain' else 0, unresolved['at'] if unresolved else 0)
+                    if at and at <= now and beijing_day(at) == beijing_day(now):
+                        credentials = vault.open(row['result_enc'], f'result:{row["id"]}')
+                        state = observe_balance(self.daily_state(row), credentials['api_user'], None, None, now)
+                        state.submitted_at = at
+                        connection.execute('UPDATE accounts SET checkin_state_enc=? WHERE id=?', (vault.seal(state.model_dump(), f'checkin-state:{row["id"]}'), row['id']))
+                connection.execute('PRAGMA user_version=10')
 
     @contextmanager
     def connection(self):
@@ -290,6 +304,27 @@ class Store:
             account['login'] = self.vault.open(account['login_enc'], f'login:{account_id}')
             account['result'] = self.vault.open(account['result_enc'], f'result:{account_id}') if account['result_enc'] else None
         return account
+
+    def mark_submission(self, account_id, api_user):
+        now = time.time()
+        with self.transaction() as connection:
+            state = self.observe_account(account_id, api_user, None, None, at=now, connection=connection)
+            if state is None:
+                raise TaskError('invalid', '账号身份已改变，未提交签到')
+            if submitted_today(state, api_user, now):
+                raise TaskError('uncertain', '今天已有提交记录，本轮仅允许只读复核，不重复提交')
+            state.submitted_at = now
+            connection.execute('UPDATE accounts SET checkin_state_enc=? WHERE id=?', (self.vault.seal(state.model_dump(), f'checkin-state:{account_id}'), account_id))
+        return now
+
+    def clear_rejected_submission(self, account_id, submitted_at):
+        # Only an explicit invalid-session receipt permits credential repair.
+        with self.transaction() as connection:
+            row = connection.execute('SELECT * FROM accounts WHERE id=?', (account_id,)).fetchone()
+            state = self.daily_state(row) if row else None
+            if state and state.submitted_at == submitted_at:
+                state.submitted_at = None
+                connection.execute('UPDATE accounts SET checkin_state_enc=? WHERE id=?', (self.vault.seal(state.model_dump(), f'checkin-state:{account_id}'), account_id))
 
     def public_account(self, row):
         login = self.vault.open(row['login_enc'], f'login:{row["id"]}')

@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.backup_schema import BackupDocument
-from app.checkin_state import DailyCheckinState, merge_daily_state, valid_observation
+from app.checkin_state import DailyCheckinState, merge_daily_state, valid_observation, observe_balance, submitted_today, beijing_day
 from app.config import VERSION
 from app.db import SCHEMA_VERSION
 from app.schemas import RuntimeSettings
@@ -162,6 +162,13 @@ def backup_router(store, auth):
                 current_state = store.daily_state(current)
                 credentials = store.vault.open(current['result_enc'], f'result:{account_id}') if current['result_enc'] else {}
                 merged = merge_daily_state(current_state, incoming_state, credentials.get('api_user'), now)
+                legacy_at = item.get('last_checkin') or 0
+                if (document['schema_version'] < 10 and item.get('checkin_status') == 'uncertain'
+                        and result and str(result.get('api_user')) == str(credentials.get('api_user'))
+                        and 0 < legacy_at <= now and beijing_day(legacy_at) == beijing_day(now)
+                        and not submitted_today(merged, credentials['api_user'], now)):
+                    merged = observe_balance(merged, credentials['api_user'], None, None, now)
+                    merged.submitted_at = legacy_at
                 connection.execute('UPDATE accounts SET checkin_state_enc=? WHERE id=?',
                                    (store.vault.seal(merged.model_dump(), f'checkin-state:{account_id}') if merged else None, account_id))
             for item in document.get('schedules') or []:
@@ -192,7 +199,8 @@ def backup_router(store, auth):
                 duplicate = False
                 for row in connection.execute('SELECT id,config_enc FROM proxies').fetchall():
                     current = store.vault.open(row['config_enc'], f'proxy:{row["id"]}')
-                    if current.get('host') == config['host'] and current.get('port') == config['port'] and current.get('username', '') == config.get('username', ''):
+                    if (current.get('scheme') == config.get('scheme') and current.get('host') == config['host']
+                            and current.get('port') == config['port'] and current.get('username', '') == config.get('username', '')):
                         duplicate = True
                         break
                 if duplicate:

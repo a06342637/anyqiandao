@@ -61,6 +61,13 @@ def settings_router(store, auth):
         rows = store.all('SELECT * FROM proxies ORDER BY created,rowid LIMIT ? OFFSET ?', (limit, (page - 1) * limit))
         return {'items': [public_proxy(row) for row in rows], 'total': store.one('SELECT COUNT(*) AS count FROM proxies')['count'], 'page': page, 'limit': limit}
 
+    @router.get('/proxies/options')
+    def proxy_options():
+        # Route selectors need every node, but no addresses or credentials.
+        rows = store.all('SELECT id,name,enabled,config_enc FROM proxies ORDER BY created,rowid')
+        return {'items': [{'id': row['id'], 'name': row['name'], 'enabled': bool(row['enabled']),
+                          'scheme': store.vault.open(row['config_enc'], f'proxy:{row["id"]}')['scheme']} for row in rows]}
+
     def insert_proxy(config, name=''):
         proxy_id = uuid.uuid4().hex
         store.execute('INSERT INTO proxies(id,name,config_enc,created) VALUES (?,?,?,?)',
@@ -128,10 +135,16 @@ def settings_router(store, auth):
 
     @router.delete('/proxies/{proxy_id}')
     def delete_proxy(proxy_id: str):
-        running = store.one("SELECT id FROM jobs WHERE proxy_id=? AND status='running'", (proxy_id,))
-        if running:
-            raise HTTPException(409, '节点正在测试，请等待完成或取消任务')
-        store.execute('DELETE FROM proxies WHERE id=?', (proxy_id,))
+        with store.transaction() as connection:
+            if connection.execute("SELECT id FROM jobs WHERE proxy_id=? AND status='running'", (proxy_id,)).fetchone():
+                raise HTTPException(409, '节点正在测试，请等待完成或取消任务')
+            settings = RuntimeSettings.model_validate_json(connection.execute("SELECT value FROM meta WHERE key='settings'").fetchone()['value'])
+            routes = list(settings.operation_routes.model_dump().values())
+            for table, column in (('accounts', 'checkin_route'), ('schedules', 'network_route')):
+                routes.extend(json.loads(row[0]) for row in connection.execute(f'SELECT {column} FROM {table}'))
+            if any(route.get('mode') == 'proxy' and route.get('proxy_id') == proxy_id for route in routes):
+                raise HTTPException(409, '此代理仍被操作默认线路、账号或签到计划引用；请先改为其他节点或直连，再删除，避免备份无法恢复')
+            connection.execute('DELETE FROM proxies WHERE id=?', (proxy_id,))
         return {'ok': True}
 
     @router.put('/settings/routes')

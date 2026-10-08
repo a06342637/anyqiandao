@@ -23,6 +23,7 @@ from app.config import ROOT, VERSION
 from app.remote_backup_schema import RemoteBackupSettings
 from app.update_common import source_files
 from app.passwords import effective_admin_hash
+from app.resources import memory_status
 
 CONFIG_KEY = 'remote_backup_config'
 STATE_KEY = 'remote_backup_state'
@@ -91,11 +92,12 @@ def create_archive(store, config, mode, directory, name):
 
 
 class RemoteBackup:
-    def __init__(self, store, config):
+    def __init__(self, store, config, resource_lock=None):
         self.store, self.config = store, config
         self.task = None
         self.scheduler = None
         self.lock = asyncio.Lock()
+        self.resource_lock = resource_lock if resource_lock is not None else asyncio.Lock()
         self.stopping = False
         self.instance = store.meta('remote_backup_instance')
         if not self.instance:
@@ -194,11 +196,29 @@ class RemoteBackup:
         if not (settings.oss.enabled or settings.sftp.enabled):
             raise BackupError('请先保存并启用至少一个备份目标')
         state = self.state()
-        state.update(running=True, started_at=time.time(), source=source, result='正在生成备份包')
+        state.update(running=True, started_at=time.time(), source=source, result='已排队，等待当前账号任务结束和可用内存')
         self.write_state(state)
         self.task = asyncio.create_task(self.run(settings, source), name='remote-backup')
 
     async def run(self, settings, source):
+        try:
+            async with self.resource_lock:
+                while True:
+                    if self.stopping or self.store.meta('maintenance') == '1':
+                        raise BackupError('正在更新或停止服务，未开始备份，保留计划等待下次执行')
+                    if memory_status()['ready']:
+                        break
+                    await asyncio.sleep(3)
+                await self._run(settings, source)
+        except BackupError as error:
+            self.log(str(error), 'warning')
+        finally:
+            state = self.state()
+            if state.get('running'):
+                state.update(running=False, status='warning', result='备份在等待资源时中断，尚未上传；计划保留')
+                self.write_state(state)
+
+    async def _run(self, settings, source):
         async with self.lock:
             state = self.state()
             started = state['started_at']
@@ -206,6 +226,8 @@ class RemoteBackup:
             results = []
             temporary = None
             try:
+                state['result'] = '正在生成备份包'
+                self.write_state(state)
                 self.log(f'{"定时" if source == "scheduled" else "手动"}远程备份开始：{"应用数据包" if settings.mode == "app" else "完整备份"}')
                 temporary = tempfile.TemporaryDirectory(prefix='.backup-', dir=self.store.path.parent)
                 name = f'any-signin-{self.instance}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex[:8]}-{settings.mode}.zip'

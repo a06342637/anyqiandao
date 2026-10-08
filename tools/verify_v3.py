@@ -583,6 +583,30 @@ class UpdaterTests(unittest.TestCase):
         self.assertTrue(any(command[:2] == ['docker', 'build'] for command in updater.commands))
         self.assertFalse(any('caddy' in command or 'prune' in command or 'down' in command for command in updater.commands))
 
+    def test_build_waits_for_remote_backup_and_pauses_before_docker(self):
+        updater = SimulatedUpdater(self.root)
+        self.store.set_meta('remote_backup_state', json.dumps({'running': True}))
+        original = updater.execute
+        def execute(command, timeout=300):
+            if command[:2] == ['docker', 'build']:
+                self.assertEqual(self.store.meta('maintenance'), '1')
+                self.assertEqual(self.store.meta('queue_paused'), '1')
+                self.assertFalse(json.loads(self.store.meta('remote_backup_state'))['running'])
+            return original(command, timeout)
+        def finish_backup(_):
+            self.store.set_meta('remote_backup_state', json.dumps({'running': False}))
+        with patch.object(updater, 'execute', side_effect=execute), patch('scripts.update_runner.time.sleep', side_effect=finish_backup):
+            self.assertTrue(self.install(updater))
+        self.assertEqual(self.store.meta('queue_paused'), '0')
+
+    def test_insufficient_build_memory_restores_original_queue_without_build(self):
+        updater = SimulatedUpdater(self.root)
+        with patch.object(updater, 'check_build_memory', side_effect=common.UpdateError('synthetic memory pressure')):
+            self.assertFalse(self.install(updater))
+        self.assertEqual(updater.commands, [])
+        self.assertEqual(self.store.meta('queue_paused'), '0')
+        self.assertEqual(self.store.meta('maintenance'), '0')
+
     def test_failed_health_restores_source_database_and_queue(self):
         updater = SimulatedUpdater(self.root, fail_health=True)
         self.assertFalse(self.install(updater))

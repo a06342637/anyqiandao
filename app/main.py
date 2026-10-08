@@ -62,7 +62,7 @@ def create_app(config=None, service=None):
     store = Store(config.data_dir, Vault(config.key))
     auth = Auth(config, store)
     engine = Engine(store, service)
-    remote_backup = RemoteBackup(store, config)
+    remote_backup = RemoteBackup(store, config, resource_lock=engine.resource_lock)
 
     @asynccontextmanager
     async def lifespan(application):

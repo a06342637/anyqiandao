@@ -146,6 +146,8 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
 
         async def hold(*args, **kwargs):
+            if kind == 'checkin' and not refresh:
+                kwargs['on_submit']()
             await gate.wait()
 
         operation = AsyncMock(side_effect=hold)

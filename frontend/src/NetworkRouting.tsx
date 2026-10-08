@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Network, Save } from 'lucide-react';
 import { api, refreshData, useResource } from './api';
 import { Button, ErrorNotice, Pagination, useToast } from './ui';
-import type { Account, NetworkRoute, OperationRoutes, PageData, ProxyNode, SettingsData } from './types';
+import type { Account, NetworkRoute, OperationRoutes, PageData, ProxyOption, SettingsData } from './types';
 
 export const OPERATIONS = [
   ['extract', '登录 / 提取 Cookie'], ['refresh', '更新 / 自动修复凭证'], ['validate', '检测凭证'],
@@ -10,7 +10,7 @@ export const OPERATIONS = [
 ] as const;
 
 export function RouteSelect({ value, onChange, proxies, inherit = false, disabled = false, label = '网络线路' }: {
-  value: NetworkRoute; onChange: (route: NetworkRoute) => void; proxies: ProxyNode[]; inherit?: boolean; disabled?: boolean; label?: string;
+  value: NetworkRoute; onChange: (route: NetworkRoute) => void; proxies: ProxyOption[]; inherit?: boolean; disabled?: boolean; label?: string;
 }) {
   const selected = value.mode === 'proxy' ? value.proxy_id || '' : value.mode;
   return <select aria-label={label} disabled={disabled} value={selected} onChange={event => onChange(event.target.value === 'direct' || event.target.value === 'inherit' ? { mode: event.target.value } : { mode: 'proxy', proxy_id: event.target.value })}>
@@ -22,7 +22,7 @@ export function RouteSelect({ value, onChange, proxies, inherit = false, disable
 
 export function OperationRouting() {
   const { data, error, reload } = useResource<SettingsData>('/settings', 0);
-  const nodes = useResource<PageData<ProxyNode>>('/proxies?limit=100', 0);
+  const nodes = useResource<{ items: ProxyOption[] }>('/proxies/options', 0);
   const [draft, setDraft] = useState<OperationRoutes | null>(null);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
@@ -42,7 +42,7 @@ export function AccountCheckinRouting() {
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState('');
   const { data, error, reload } = useResource<PageData<Account>>(`/accounts?page=${page}&limit=10`, 0);
-  const nodes = useResource<PageData<ProxyNode>>('/proxies?limit=100', 0);
+  const nodes = useResource<{ items: ProxyOption[] }>('/proxies/options', 0);
   const toast = useToast();
   const save = async (account: Account, network_route: NetworkRoute) => {
     setBusy(account.id);
