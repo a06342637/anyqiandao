@@ -1,8 +1,8 @@
-# any签到助手 v0.5.2
+# any签到助手 v0.5.3
 
 私有部署的 AnyRouter 凭证提取、账号检测与自动签到工作空间。React / TypeScript / Vite 前端，FastAPI / Playwright / SQLite 后端。
 
-v0.5.2 起，未登录仅显示登录页；公网管理访问必须使用 HTTPS，无域名时通过 SSH 隧道访问。备份和恢复无需额外密码：手动导出 JSON，远程备份生成 ZIP。升级前请阅读 [安全与隐私说明](docs/安全与隐私.md)。
+v0.5.3 起，未登录仅显示登录页；公网管理访问必须使用 HTTPS，无域名时通过 SSH 隧道访问。备份和恢复无需额外密码：手动导出 JSON，远程备份生成 ZIP。升级前请阅读 [安全与隐私说明](docs/安全与隐私.md)。
 
 ## 功能
 
@@ -75,7 +75,7 @@ bash scripts/deploy.sh
 | --- | --- | --- |
 | 应用端口 | 随机选择一个空闲端口 | `18780`，方便提前配置安全组 |
 | 管理员用户名 | `admin` | 自己的管理账号 |
-| 管理员密码 | 自动生成随机强密码 | 12–1024 位密码，输入时不回显 |
+| 管理员密码 | 自动生成随机强密码 | 5–1024 位密码，输入时不回显 |
 
 然后脚本会下载运行环境、构建镜像、初始化数据库与密钥、启动应用并安装在线更新执行器。首次构建可能需要几分钟至十几分钟，请等待终端显示“已部署”。
 
@@ -130,9 +130,21 @@ bash scripts/deploy.sh https://你的域名
 
 ### Cloudflare Tunnel 反代
 
-Tunnel 的服务地址可以保持 `http://127.0.0.1:8001`（端口使用实际应用端口）。v0.5.2 支持自动识别本机 cloudflared 的 HTTPS 转发，登录、来源校验和 Secure Cookie 会使用浏览器实际的 HTTPS 域名。
+Tunnel 的服务地址可以保持 `http://127.0.0.1:8001`（端口使用实际应用端口）。v0.5.3 支持自动识别本机 cloudflared 的 HTTPS 转发，登录、来源校验和 Secure Cookie 会使用浏览器实际的 HTTPS 域名。
 
 如果旧版仍显示“需要安全连接”，先在 `.env` 设置实际公网 HTTPS 的 `APP_PUBLIC_URL`，保持 `APP_ENABLE_HTTPS_PROXY=0`，然后重新创建 app 容器，再从网页升级。完整步骤与独立容器代理配置见 [Cloudflare Tunnel 说明](docs/Cloudflare-Tunnel.md)。
+
+### 修改管理员密码
+
+已登录时，在 **设置 → 管理员密码** 输入新密码，点击“保存新密码并退出”。无需原密码，支持 5–1024 个字符及纯数字。保存后立即生效，所有旧登录会话退出；重新登录即可，服务不需要重启。
+
+忘记密码、无法进入网页时，在项目部署目录的交互式 SSH 终端运行：
+
+```bash
+sudo bash scripts/reset-password.sh
+```
+
+终端重置同样接受至少 5 个字符。它使用当前 app 的实际镜像，安全读取两次新密码，更新密码后重新创建 app 容器。主加密密钥、业务账号和数据保留。输入中断或不一致时会给出明确提示。网页设置的新密码不会明文写入部署信息.txt，旧的初始密码记录不再代表当前密码。
 
 ### 以后怎么更新
 
@@ -204,6 +216,7 @@ python tools/verify_v035.py
 python tools/verify_v036.py
 python tools/verify_remote_backup.py
 python tools/verify_privacy.py
+python tools/verify_admin_password.py
 python tools/verify_reverse_proxy.py
 python tools/verify_source_privacy.py
 python tools/verify_deploy.py

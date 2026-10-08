@@ -13,7 +13,7 @@ from app.config import APP_NAME, ROOT, VERSION, Config
 from app.crypto import Vault
 from app.db import SCHEMA_VERSION, Store
 from app.engine import Engine
-from app.schemas import LoginInput
+from app.schemas import LoginInput, AdminPasswordInput
 from app.settings_api import settings_router
 from app.history_api import history_router
 from app.credential_api import credential_router
@@ -151,6 +151,14 @@ def create_app(config=None, service=None):
     def logout(request: Request, token=Depends(auth.require)):
         auth.logout(token)
         response = JSONResponse({'ok': True})
+        response.delete_cookie(COOKIE_NAME, path='/', secure=config.cookie_secure or uses_https(request, config), httponly=True, samesite='strict')
+        response.headers['Clear-Site-Data'] = '"cache", "storage"'
+        return response
+
+    @app.put('/api/v1/settings/admin-password')
+    async def reset_admin_password(request: Request, payload: AdminPasswordInput, token=Depends(auth.require)):
+        await auth.reset_password(payload.new_password, token)
+        response = JSONResponse({'ok': True, 'message': '管理员密码已更新，请使用新密码重新登录'})
         response.delete_cookie(COOKIE_NAME, path='/', secure=config.cookie_secure or uses_https(request, config), httponly=True, samesite='strict')
         response.headers['Clear-Site-Data'] = '"cache", "storage"'
         return response

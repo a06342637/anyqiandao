@@ -7,6 +7,7 @@ import secrets
 import sqlite3
 import sys
 import time
+import warnings
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,6 +16,34 @@ from argon2 import PasswordHasher
 from app.config import ROOT, VERSION, Config
 from app.crypto import Vault
 from app.db import Store
+from app.passwords import ADMIN_HASH_CONTEXT, ADMIN_PASSWORD_MIN, ADMIN_PASSWORD_MAX
+
+
+class PasswordInputError(RuntimeError):
+    pass
+
+
+def validate_admin_password(password):
+    if not ADMIN_PASSWORD_MIN <= len(password) <= ADMIN_PASSWORD_MAX:
+        raise PasswordInputError('管理员密码需要 5–1024 个字符，未修改密码')
+
+
+def read_reset_password(args):
+    if getattr(args, 'password_stdin', False):
+        password = sys.stdin.read(ADMIN_PASSWORD_MAX + 1)
+        validate_admin_password(password)
+        return password
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', getpass.GetPassWarning)
+            password = getpass.getpass('输入新的管理员密码（5–1024 字符，不回显）：')
+            validate_admin_password(password)
+            confirmation = getpass.getpass('再次输入新密码：')
+    except (EOFError, getpass.GetPassWarning):
+        raise PasswordInputError('未能安全读取密码，请在交互式终端运行重置脚本；密码未修改') from None
+    if password != confirmation:
+        raise PasswordInputError('两次输入不一致，密码未修改')
+    return password
 
 
 def private_file(path, content, *, owner=None):
@@ -35,8 +64,8 @@ def initialize(args):
     if not 1 <= args.port <= 65535 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}', args.username):
         raise RuntimeError('端口或管理员用户名不合法')
     supplied_password = sys.stdin.read(4097) if args.password_stdin else ''
-    if supplied_password and not 12 <= len(supplied_password) <= 1024:
-        raise RuntimeError('自定义管理密码必须为 12–1024 个字符，或留空使用随机强密码')
+    if supplied_password:
+        validate_admin_password(supplied_password)
     for path in (root / 'secrets' / 'app.key', root / 'secrets' / 'admin.hash', root / 'data' / 'assistant.sqlite3', root / '.env', root / '部署信息.txt'):
         if path.exists():
             raise RuntimeError('检测到已有配置或数据库，拒绝重新初始化；请恢复匹配密钥或使用升级流程')
@@ -95,14 +124,31 @@ def pause(args):
 
 def reset_password(args):
     config = Config.from_env()
-    password = getpass.getpass('输入新的管理员密码（至少 16 字符，不回显）：')
-    if len(password) < 16 or password != getpass.getpass('再次输入新密码：'):
-        raise RuntimeError('密码太短或两次输入不一致，未修改')
+    password = read_reset_password(args)
     path = Path(os.environ.get('APP_ADMIN_PASSWORD_HASH_FILE', str(ROOT / 'secrets' / 'admin.hash')))
-    with path.open('w', encoding='utf-8') as output:
-        output.write(PasswordHasher().hash(password) + '\n')
-    Store(config.data_dir, Vault(config.key)).execute('DELETE FROM sessions')
-    print('密码哈希已更新、旧会话已注销。请重启本项目使新密码生效，密钥未改变。')
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError('密码哈希文件缺失或为符号链接')
+    metadata = path.stat()
+    store = Store(config.data_dir, Vault(config.key))
+    encoded = PasswordHasher().hash(password) + '\n'
+    temporary = path.with_name('.admin-reset-' + secrets.token_hex(8))
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+            output.write(encoded)
+            output.flush()
+            os.fsync(output.fileno())
+        if os.name != 'nt':
+            os.chown(temporary, metadata.st_uid, metadata.st_gid)
+        # Validate/decrypt the database before changing the hash. A failed file
+        # replacement rolls back session revocation and leaves the old file intact.
+        with store.transaction() as connection:
+            connection.execute('DELETE FROM sessions')
+            connection.execute('DELETE FROM meta WHERE key=?', (ADMIN_HASH_CONTEXT,))
+            os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    print('密码哈希已更新、旧会话已注销。请重新创建 app 容器加载新密码；主加密密钥未改变。')
 
 
 def main():
@@ -123,10 +169,16 @@ def main():
     backup_parser.add_argument('--output', type=Path, required=True)
     backup_parser.set_defaults(handler=backup)
     commands.add_parser('pause').set_defaults(handler=pause)
-    commands.add_parser('reset-password').set_defaults(handler=reset_password)
+    reset = commands.add_parser('reset-password')
+    reset.add_argument('--password-stdin', action='store_true', help='通过标准输入接收密码，避免将密码写进命令行参数')
+    reset.set_defaults(handler=reset_password)
     args = parser.parse_args()
     try:
         args.handler(args)
+    except PasswordInputError as error:
+        raise SystemExit(str(error)) from None
+    except (EOFError, KeyboardInterrupt):
+        raise SystemExit('输入已中止，请重新运行命令；不会显示密码。') from None
     except (RuntimeError, OSError, sqlite3.Error):
         raise SystemExit('操作未完成：请检查参数、原始配置、暂停状态、文件权限和可用空间；不会自动替换旧密钥。') from None
 

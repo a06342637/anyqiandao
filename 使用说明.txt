@@ -1,4 +1,4 @@
-any签到助手 v0.5.2 使用说明
+any签到助手 v0.5.3 使用说明
 
 部署入口：将项目源码上传到 Ubuntu 22.04+ / Debian 12+，在项目目录运行 sudo bash scripts/deploy.sh。
 脚本自动安装缺少的 Docker / Compose / Python。端口回车随机空闲值，用户名回车 admin，密码回车生成随机强密码。
@@ -76,4 +76,6 @@ v0.3.0 前的统计基于旧缓存，保留次数及原记录但不混入实时�
 
 安全策略与升级注意事项见 docs/安全与隐私.md。
 
-Cloudflare Tunnel 可以通过 HTTP 回源本机应用，v0.5.2 自动识别可信代理的外部 HTTPS。登录受阻的旧版配置修复见 docs/Cloudflare-Tunnel.md。
+Cloudflare Tunnel 可以通过 HTTP 回源本机应用，v0.5.3 自动识别可信代理的外部 HTTPS。登录受阻的旧版配置修复见 docs/Cloudflare-Tunnel.md。
+
+管理员密码：设置 → 管理员密码，直接输入新密码（至少 5 个字符），无需原密码；保存后立即退出旧会话，使用新密码重新登录。忘记密码可在交互式 SSH 终端执行 sudo bash scripts/reset-password.sh。

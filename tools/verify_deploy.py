@@ -282,7 +282,7 @@ if [[ "${MOCK_FAILURE:-}" == backup ]]; then exit 33; fi
         password = 'synthetic-password-123'
         result, output = self.interactive([('空闲端口）：', 'invalid'), ('空闲端口）：', ''),
                                           ('默认 admin）：', 'bad name'), ('默认 admin）：', 'operator'),
-                                          ('1024 位）：', 'short'), ('1024 位）：', password)])
+                                          ('1024 位）：', '1234'), ('1024 位）：', password)])
         self.assertEqual(result, 0, output)
         self.assertEqual(self.configuration()['APP_ADMIN_USERNAME'], 'operator')
         self.assertEqual((self.root / 'received-password').read_text(), password)

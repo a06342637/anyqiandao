@@ -1,4 +1,4 @@
-any签到助手 v0.5.2 · 安全部署说明
+any签到助手 v0.5.3 · 安全部署说明
 
 完整的新机器部署教程请阅读 README.md 的“新机器部署教程”。
 
@@ -18,3 +18,5 @@ any签到助手 v0.5.2 · 安全部署说明
 详情见 docs/安全与隐私.md 和 docs/远程自动备份.md。
 
 Cloudflare Tunnel 回源可继续使用 http://127.0.0.1:应用端口；自动代理识别及旧版修复方法见 docs/Cloudflare-Tunnel.md。
+
+管理员密码：设置 → 管理员密码，直接输入新密码（至少 5 个字符），无需原密码；保存后立即退出旧会话，使用新密码重新登录。忘记密码可在交互式 SSH 终端执行 sudo bash scripts/reset-password.sh。

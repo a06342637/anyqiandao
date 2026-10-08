@@ -22,6 +22,8 @@ jobs:
       - run: python tools/verify_privacy.py
       - run: python tools/verify_reverse_proxy.py
       - run: python tools/verify_release_permissions.py
+      - name: Verify administrator password and interactive reset
+        run: sudo env "PATH=$PATH" python tools/verify_admin_password.py
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile --ignore-scripts && pnpm run build
         working-directory: frontend
@@ -81,8 +83,19 @@ jobs:
           tunnel_headers['Cookie'] = 'any_assistant_session=' + cookies['any_assistant_session'].value
           request = urllib.request.Request('http://127.0.0.1:19888/api/v1/auth/me', headers=tunnel_headers)
           with urllib.request.urlopen(request, timeout=5) as response:
-              assert json.load(response)['username'] == 'admin'
+              administrator = json.load(response)
+              assert administrator['username'] == 'admin'
           print('Tunnel HTTPS, same-origin authentication and Secure cookie checks passed.')
+          tunnel_headers['X-CSRF-Token'] = administrator['csrf_token']
+          request = urllib.request.Request('http://127.0.0.1:19888/api/v1/settings/admin-password', method='PUT',
+                      data=json.dumps({'new_password': '86420'}).encode(), headers=tunnel_headers)
+          with urllib.request.urlopen(request, timeout=5) as response:
+              assert json.load(response)['ok']
+          request = urllib.request.Request('http://127.0.0.1:19888/api/v1/auth/login',
+                      data=json.dumps({'password': '86420'}).encode(), headers=tunnel_headers)
+          with urllib.request.urlopen(request, timeout=5) as response:
+              assert 'csrf_token' in json.load(response)
+          print('Password reset without the old password works in the read-only container.')
           PY
       - uses: actions/upload-artifact@v4
         with:

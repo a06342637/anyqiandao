@@ -22,6 +22,7 @@ from app.backup_targets import BackupError, blocking, open_target, safe_error
 from app.config import ROOT, VERSION
 from app.remote_backup_schema import RemoteBackupSettings
 from app.update_common import source_files
+from app.passwords import effective_admin_hash
 
 CONFIG_KEY = 'remote_backup_config'
 STATE_KEY = 'remote_backup_state'
@@ -74,7 +75,7 @@ def create_archive(store, config, mode, directory, name):
         if mode == 'full':
             archive.write(database, 'data/assistant.sqlite3')
             archive.writestr('secrets/app.key', base64.urlsafe_b64encode(config.key).decode() + '\n')
-            archive.writestr('secrets/admin.hash', config.admin_hash + '\n')
+            archive.writestr('secrets/admin.hash', effective_admin_hash(snapshot_store, config) + '\n')
             # Only known deployment fields: no arbitrary environment variables or remote backup secrets.
             archive.writestr('.env', f'APP_PUBLIC_URL={config.public_url}\nAPP_ADMIN_USERNAME={config.admin_username}\n'
                              f'APP_IMAGE=any-signin-assistant:{VERSION}\nAPP_ALLOW_INSECURE_HTTP={int(not config.cookie_secure)}\n'

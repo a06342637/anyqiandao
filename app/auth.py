@@ -9,6 +9,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from fastapi import HTTPException, Request
 from app.security import canonical_origin, request_origin
+from app.passwords import ADMIN_HASH_CONTEXT, effective_admin_hash
 
 COOKIE_NAME = 'any_assistant_session'
 
@@ -43,17 +44,36 @@ class Auth:
         if len(attempts) >= 10:
             raise HTTPException(429, '尝试次数过多，请 15 分钟后再试')
         attempts.append(now)
+        password_state = self.store.meta(ADMIN_HASH_CONTEXT)
         try:
             async with self.hash_slots:
-                await asyncio.to_thread(self.hasher.verify, self.config.admin_hash, password)
+                await asyncio.to_thread(self.hasher.verify, effective_admin_hash(self.store, self.config, password_state), password)
         except VerificationError:
             raise HTTPException(401, '管理员账号或密码不正确') from None
         if not hmac.compare_digest(username.encode(), self.config.admin_username.encode()):
             raise HTTPException(401, '管理员账号或密码不正确')
-        attempts.clear()
         token = secrets.token_urlsafe(32)
-        self.store.execute('INSERT INTO sessions VALUES (?,?)', (hashlib.sha256(token.encode()).hexdigest(), time.time() + 86400))
+        with self.store.transaction() as connection:
+            current = connection.execute('SELECT value FROM meta WHERE key=?', (ADMIN_HASH_CONTEXT,)).fetchone()
+            if (current['value'] if current else '') != password_state:
+                raise HTTPException(401, '管理员密码已更改，请使用新密码重新登录')
+            connection.execute('INSERT INTO sessions VALUES (?,?)', (hashlib.sha256(token.encode()).hexdigest(), time.time() + 86400))
+        attempts.clear()
         return token
+
+    async def reset_password(self, password, token):
+        async with self.hash_slots:
+            hashed = await asyncio.to_thread(self.hasher.hash, password)
+        sealed = self.store.vault.seal(hashed, ADMIN_HASH_CONTEXT)
+        with self.store.transaction() as connection:
+            session = connection.execute('SELECT expires FROM sessions WHERE token_hash=?', (hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
+            if not session or session['expires'] <= time.time():
+                raise HTTPException(401, '登录已失效，请重新登录后设置密码')
+            connection.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (ADMIN_HASH_CONTEXT, sealed))
+            connection.execute('DELETE FROM sessions')
+            connection.execute('INSERT INTO logs(kind,level,message,created,category) VALUES (?,?,?,?,?)',
+                               ('system', 'info', '管理员密码已重置，所有旧登录会话已注销', time.time(), 'system'))
+        self.attempts.clear()
 
     def session(self, request: Request):
         token = request.cookies.get(COOKIE_NAME, '')

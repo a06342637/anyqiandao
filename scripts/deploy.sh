@@ -105,14 +105,14 @@ else
     done
     if [[ -t 0 ]]; then
         while true; do
-            read -r -s -p '管理员密码（回车使用默认随机强密码；自定义 12–1024 位）：' ADMIN_PASSWORD
+            read -r -s -p '管理员密码（回车使用默认随机密码；自定义 5–1024 位）：' ADMIN_PASSWORD
             printf '\n'
-            if [[ -z "$ADMIN_PASSWORD" || ( ${#ADMIN_PASSWORD} -ge 12 && ${#ADMIN_PASSWORD} -le 1024 ) ]]; then break; fi
-            printf '密码需要 12–1024 位，请重新输入。\n'
+            if [[ -z "$ADMIN_PASSWORD" || ( ${#ADMIN_PASSWORD} -ge 5 && ${#ADMIN_PASSWORD} -le 1024 ) ]]; then break; fi
+            printf '密码需要 5–1024 位，请重新输入。\n'
         done
     fi
-    if [[ -n "$ADMIN_PASSWORD" && ( ${#ADMIN_PASSWORD} -lt 12 || ${#ADMIN_PASSWORD} -gt 1024 ) ]]; then
-        printf '管理员密码需要 12–1024 位，或留空生成随机强密码。\n' >&2
+    if [[ -n "$ADMIN_PASSWORD" && ( ${#ADMIN_PASSWORD} -lt 5 || ${#ADMIN_PASSWORD} -gt 1024 ) ]]; then
+        printf '管理员密码需要 5–1024 位，或留空生成随机密码。\n' >&2
         exit 1
     fi
     if [[ -z "$PUBLIC_URL" ]]; then

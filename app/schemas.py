@@ -3,6 +3,7 @@ import unicodedata
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from app.passwords import ADMIN_PASSWORD_MIN, ADMIN_PASSWORD_MAX
 
 
 class StrictModel(BaseModel):
@@ -12,6 +13,10 @@ class StrictModel(BaseModel):
 class LoginInput(StrictModel):
     username: str = Field(default='admin', min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=1024)
+
+
+class AdminPasswordInput(StrictModel):
+    new_password: str = Field(min_length=ADMIN_PASSWORD_MIN, max_length=ADMIN_PASSWORD_MAX)
 
 
 class AccountInput(StrictModel):

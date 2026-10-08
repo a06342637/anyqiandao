@@ -12,6 +12,7 @@ import type { CleanupResult, PageData, ProxyNode, RuntimeSettings, SettingsData 
 const settingsTabs = [
   { id: 'runtime', label: '运行与日志', icon: Settings2, description: '网络连接、自动续签与日志保留策略。' },
   { id: 'appearance', label: '站点外观', icon: Palette, description: '让这个工作空间拥有你的名字。' },
+  { id: 'admin-password', label: '管理员密码', icon: LockKeyhole, description: '直接设置新的登录密码，无需验证原密码。' },
   { id: 'proxies', label: '代理池', icon: Network, description: '管理登录与签到使用的网络出口。' },
   { id: 'backup', label: '备份与恢复', icon: DatabaseBackup, description: '安全保留账号、凭证、计划和历史数据。' },
   { id: 'remote-backup', label: '远程自动备份', icon: DatabaseBackup, description: '定时备份到阿里云 OSS 或 SSH / SFTP 服务器。' },
@@ -32,6 +33,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         <ErrorNotice message={error} retry={reload} />
         {tab === 'runtime' && (data ? <RuntimeForm initial={data} /> : <p className="muted">正在读取设置…</p>)}
         {tab === 'appearance' && (data ? <AppearancePanel initial={data.settings} /> : <p className="muted">正在读取外观设置…</p>)}
+        {tab === 'admin-password' && <AdminPasswordPanel />}
         {tab === 'proxies' && <ProxyManager />}
         {tab === 'backup' && <BackupPanel />}
         {tab === 'remote-backup' && <RemoteBackupPanel />}
@@ -40,6 +42,31 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   </Modal>;
+}
+
+function AdminPasswordPanel() {
+  const [password, setPassword] = useState('');
+  const [visible, setVisible] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setMessage('');
+    try {
+      await api('/settings/admin-password', 'PUT', { new_password: password });
+      setPassword('');
+      const channel = new BroadcastChannel('any-session');
+      channel.postMessage('password-reset'); channel.close();
+      window.dispatchEvent(new Event('any-auth-expired'));
+    } catch (error) { setMessage((error as Error).message); setBusy(false); }
+  };
+  return <form onSubmit={save} className="settings-section">
+    <h3><LockKeyhole size={17} /> 重置管理员密码</h3>
+    <p className="form-hint">只需输入新密码，至少 5 个字符，也可以使用纯数字。保存后立即生效，所有已登录页面会退出，需要使用新密码重新登录。</p>
+    <label className="field">新管理员密码<input name="new-password" type={visible ? 'text' : 'password'} autoComplete="new-password" required minLength={5} maxLength={1024} value={password} disabled={busy} onChange={event => setPassword(event.target.value)} placeholder="至少 5 个字符" /></label>
+    <label className="check-label"><input type="checkbox" checked={visible} disabled={busy} onChange={event => setVisible(event.target.checked)} />显示新密码</label>
+    <ErrorNotice message={message} />
+    <div className="modal-actions"><Button type="submit" variant="primary" busy={busy} disabled={busy || password.length < 5}><Save size={15} />保存新密码并退出</Button></div>
+  </form>;
 }
 
 function RuntimeForm({ initial }: { initial: SettingsData }) {
