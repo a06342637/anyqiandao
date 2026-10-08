@@ -48,7 +48,7 @@ function InsightQuery({ account, timezone, onClose, query, onChange }: Omit<Insi
       <Button disabled={loading && !resource.error} onClick={() => { if (pendingJob && resource.error) void resource.reload().catch(() => {}); else onChange({ revision: revision + 1 }); }}><RefreshCw size={15} />{pendingJob && resource.error ? '重试读取进度' : '重新加载'}</Button>
     </div>
     <ErrorNotice message={error} />
-    {loading && <div className="insight-loading" role="status"><RefreshCw size={22} className="spin" /><strong>{resource.data?.paused && status === 'pending' ? '查询已排队，队列当前暂停' : status === 'running' ? '正在读取网站数据…' : '正在加入普通队列…'}</strong><p>{resource.data?.paused ? '请到执行队列继续任务；关闭此窗口不会取消排队。' : '沿用账号任务的代理和并发设置，同一账号不会并行操作。'}</p></div>}
+    {loading && <div className="insight-loading" role="status"><RefreshCw size={22} className="spin" /><strong>{resource.data?.paused && status === 'pending' ? '查询已排队，队列当前暂停' : status === 'running' ? '正在读取网站数据…' : '正在加入执行队列…'}</strong><p>{resource.data?.paused ? '请到执行队列继续任务；关闭此窗口不会取消排队。' : '使用代理池中为该查询指定的线路，与其他任务共用全局串行队列。'}</p></div>}
     {data && !loading && !error && <>
       <div className="insight-profile"><span><strong>{data.profile.display_name || data.profile.username || account.username}</strong><small>{data.profile.group ? `分组 ${data.profile.group}` : '用户默认分组'}</small></span><span>读取于 {formatTime(data.fetched_at, timezone)}</span></div>
       {data.view === 'dashboard' ? <DashboardData data={data} timezone={timezone} /> : <>

@@ -4,6 +4,7 @@ COPY VERSION ./VERSION
 COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/
 RUN npm install --global pnpm@11.19.0
 WORKDIR /build/frontend
+ENV NODE_OPTIONS=--max-old-space-size=384
 RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY frontend/ ./
 RUN pnpm run build

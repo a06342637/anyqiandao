@@ -10,7 +10,7 @@ from app.crypto import Vault
 from app.checkin_state import DailyCheckinState, observe_balance
 from app.schemas import RuntimeSettings
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def checkin_earned(row):
@@ -163,6 +163,12 @@ class Store:
                 if 'reward_amount' not in columns:
                     connection.execute('ALTER TABLE checkins ADD COLUMN reward_amount REAL')
                 connection.execute('PRAGMA user_version=8')
+            if version < 9:
+                if 'checkin_route' not in {row['name'] for row in connection.execute('PRAGMA table_info(accounts)')}:
+                    connection.execute('ALTER TABLE accounts ADD COLUMN checkin_route TEXT NOT NULL DEFAULT \'{"mode":"inherit"}\'')
+                if 'network_route' not in {row['name'] for row in connection.execute('PRAGMA table_info(schedules)')}:
+                    connection.execute('ALTER TABLE schedules ADD COLUMN network_route TEXT NOT NULL DEFAULT \'{"mode":"inherit"}\'')
+                connection.execute('PRAGMA user_version=9')
             if not existing:
                 connection.execute('INSERT INTO meta VALUES (?, ?)', ('key_check', vault.seal('any-assistant', 'key_check')))
             connection.execute('INSERT OR IGNORE INTO meta VALUES (?, ?)', ('settings', RuntimeSettings().model_dump_json()))
@@ -172,6 +178,10 @@ class Store:
             if 'queue_retention_days' not in settings:
                 settings['queue_retention_days'] = settings.get('log_retention_days', 7)
                 connection.execute("UPDATE meta SET value=? WHERE key='settings'", (json.dumps(settings),))
+            if version < 9:
+                settings['max_concurrency'] = settings['checkin_concurrency'] = 1
+                settings['proxy_mode'] = 'direct'
+                connection.execute("UPDATE meta SET value=? WHERE key='settings'", (RuntimeSettings.model_validate(settings).model_dump_json(),))
 
     @contextmanager
     def connection(self):
@@ -287,7 +297,7 @@ class Store:
                                          'checkin_status', 'quota', 'created', 'updated', 'note', 'position')} | {
             'username': login['username'], 'has_password': bool(login.get('password')), 'has_result': bool(row['result_enc']),
             'credential_source': 'password' if login.get('password') else 'session' if row['result_enc'] else 'missing',
-            'last_balance': self.checkin_balance(account_id=row['id'])}
+            'last_balance': self.checkin_balance(account_id=row['id']), 'checkin_route': json.loads(row['checkin_route'])}
 
     def selection_where(self, selection, *, exportable=False):
         clauses, values = [], []

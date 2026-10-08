@@ -99,7 +99,9 @@ class BrowserSession:
         try:
             proxy = self.route.browser_proxy if self.route else None
             arguments = ['--disable-quic', '--disable-background-networking', '--disable-component-update',
-                         '--disable-blink-features=AutomationControlled', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
+                         '--disable-blink-features=AutomationControlled', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+                         '--disable-gpu', '--renderer-process-limit=2', '--disable-extensions', '--disable-default-apps',
+                         '--js-flags=--max-old-space-size=160']
             if proxy:
                 arguments.append('--host-resolver-rules=MAP * ~NOTFOUND,EXCLUDE localhost,EXCLUDE 127.0.0.1')
             self.browser = await runtime.chromium.launch(headless=True, proxy=proxy, args=arguments)
@@ -120,7 +122,9 @@ class BrowserSession:
     async def protect_destination(self, request_route):
         request = request_route.request
         address = urlsplit(request.url)
-        if address.hostname and not allowed_destination(address.hostname):
+        if getattr(request, 'resource_type', None) in ('image', 'media', 'font'):
+            await request_route.abort()
+        elif address.hostname and not allowed_destination(address.hostname):
             await request_route.abort()
         elif address.hostname == urlsplit(TARGET_ORIGIN).hostname and address.path == CHECKIN_PATH:
             headers = dict(request.headers)
@@ -133,10 +137,22 @@ class BrowserSession:
             await request_route.continue_()
 
     async def __aexit__(self, *args):
+        # A second cancel (for example stop during a timeout) must not release
+        # the global execution slot while Chromium is still being closed.
+        cleanup = asyncio.create_task(self.close())
+        cancelled = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def close(self):
         # Closing must never stall the serial queue: each stage is bounded, and stopping the driver kills the browser regardless.
         try:
-            if self.context:
-                await asyncio.wait_for(self.context.unroute('**/*'), 5)
             if self.browser:
                 await asyncio.wait_for(self.browser.close(), 15)
         except (Exception, asyncio.TimeoutError):
@@ -243,17 +259,20 @@ class BrowserSession:
 class PageClient:
     """Minimal httpx-like client handed to the vendored script; the request is performed by the page."""
 
-    def __init__(self, session, loop):
+    def __init__(self, session, loop, on_submit=None):
         self.session = session
         self.loop = loop
         self.response = None
         self.sent = False
+        self.on_submit = on_submit
 
     def post(self, url, *, headers, timeout):
         address = urlsplit(url)
         if address.scheme != 'https' or address.hostname != urlsplit(TARGET_ORIGIN).hostname or address.path != '/api/user/sign_in':
             raise TaskError('script_error', '脚本目标地址不在允许范围内')
         self.sent = True
+        if self.on_submit:
+            self.on_submit()
         future = asyncio.run_coroutine_threadsafe(
             self.session.api(address.path, method='POST', headers=dict(headers), timeout=int(timeout * 1000)), self.loop)
         status, text = future.result(timeout + 15)
@@ -290,7 +309,7 @@ class RouterService:
         async with self.signed_in(credentials, route, settings) as session:
             return await read_console(session, credentials, settings, options)
 
-    async def checkin(self, credentials, route, settings, *, before_submit=None):
+    async def checkin(self, credentials, route, settings, *, before_submit=None, on_submit=None):
         async with self.signed_in(credentials, route, settings) as session:
             status, text = await session.api('/api/user/self', headers=api_headers(credentials))
             before = profile_result(status, text, credentials['api_user'])
@@ -299,7 +318,7 @@ class RouterService:
                 observed = before_submit(before, observed_before)
                 if observed:
                     return observed
-            client = PageClient(session, asyncio.get_running_loop())
+            client = PageClient(session, asyncio.get_running_loop(), on_submit)
             provider = SimpleNamespace(domain=TARGET_ORIGIN, sign_in_path='/api/user/sign_in')
             headers = api_headers(credentials) | {'Origin': TARGET_ORIGIN, 'Referer': TARGET_ORIGIN + '/console'}
             claimed_at = time.time()
@@ -316,7 +335,12 @@ class RouterService:
                 raise TaskError('uncertain' if client.sent else 'script_error', '签到请求已发送但结果未确认；不会立即重复提交' if client.sent else '内置签到脚本执行异常') from None
             if client.response is None:
                 raise TaskError('script_error', '脚本没有返回响应')
-            receipt_code, message = checkin_result(client.response.status_code, client.response.text)
+            try:
+                receipt_code, message = checkin_result(client.response.status_code, client.response.text)
+            except TaskError as error:
+                if error.retry_proxy:
+                    raise TaskError('uncertain', '签到请求已提交但回执异常，不自动重试或切换线路补发') from None
+                raise
             code = receipt_code
             receipt = json.loads(client.response.text)
             receipt_message = str(receipt.get('message', receipt.get('msg', ''))).strip()

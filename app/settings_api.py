@@ -1,12 +1,14 @@
 import time
 import uuid
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.branding import public_branding
 from app.config import VERSION
 from app.proxy import parse_proxy
-from app.schemas import BrandingSettings, ProxyImport, ProxyInput, ProxyTrust, RuntimeSettings, ScheduleInput, Selection
+from app.schemas import AccountCheckinRoute, BrandingSettings, OperationRoutes, ProxyImport, ProxyInput, ProxyTrust, RuntimeSettings, ScheduleInput, Selection
+from app.network_routes import validate_route
 
 
 def settings_router(store, auth):
@@ -22,7 +24,7 @@ def settings_router(store, auth):
 
     @router.put('/settings')
     def update_settings(payload: RuntimeSettings):
-        changes = payload.model_dump(include=payload.model_fields_set, exclude={'max_concurrency', 'checkin_concurrency', 'auto_checkin_interval_minutes', 'site_name', 'site_icon_text'})
+        changes = payload.model_dump(include=payload.model_fields_set, exclude={'max_concurrency', 'checkin_concurrency', 'auto_checkin_interval_minutes', 'site_name', 'site_icon_text', 'operation_routes', 'proxy_mode'})
         with store.transaction() as connection:
             current = connection.execute("SELECT value FROM meta WHERE key='settings'").fetchone()
             previous = RuntimeSettings.model_validate_json(current['value'])
@@ -132,11 +134,35 @@ def settings_router(store, auth):
         store.execute('DELETE FROM proxies WHERE id=?', (proxy_id,))
         return {'ok': True}
 
+    @router.put('/settings/routes')
+    def operation_routes(payload: OperationRoutes):
+        with store.transaction() as connection:
+            for name in type(payload).model_fields:
+                validate_route(store, getattr(payload, name), connection)
+            previous = RuntimeSettings.model_validate_json(connection.execute("SELECT value FROM meta WHERE key='settings'").fetchone()['value'])
+            updated = previous.model_copy(update={'operation_routes': payload, 'proxy_mode': 'direct'})
+            connection.execute("UPDATE meta SET value=? WHERE key='settings'", (updated.model_dump_json(),))
+        store.log('system', '操作线路已保存；仅显式指定的操作使用所选代理，当前执行任务保持原线路')
+        return payload.model_dump()
+
+    @router.put('/accounts/routes/checkin')
+    def account_checkin_route(payload: AccountCheckinRoute):
+        with store.transaction() as connection:
+            validate_route(store, payload.network_route, connection)
+            where, values = store.selection_where(payload)
+            if not store.selection_count(payload, connection=connection):
+                raise HTTPException(400, '请先选择账号')
+            changed = connection.execute('UPDATE accounts SET checkin_route=? WHERE ' + where, [payload.network_route.model_dump_json(), *values]).rowcount
+        store.log('system', f'已设置 {changed} 个账号的签到线路；对后续领取的任务生效')
+        return {'updated': changed}
+
     @router.get('/schedules')
     def schedules(page: int = Query(1, ge=1), limit: int = Query(10, ge=1, le=100)):
         auto_id = store.meta('auto_schedule_id') or None
         rows = store.all('SELECT schedules.*,(SELECT COUNT(*) FROM schedule_accounts WHERE schedule_id=schedules.id) AS account_count FROM schedules '
                          'ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END,created DESC LIMIT ? OFFSET ?', (auto_id or '', limit, (page - 1) * limit))
+        for row in rows:
+            row['network_route'] = json.loads(row['network_route'])
         return {'items': rows, 'total': store.one('SELECT COUNT(*) AS count FROM schedules')['count'], 'page': page, 'limit': limit, 'auto_schedule_id': auto_id}
 
     @router.get('/schedules/{schedule_id}')
@@ -145,11 +171,13 @@ def settings_router(store, auth):
         if not schedule:
             raise HTTPException(404, '签到计划不存在')
         schedule['account_count'] = store.one('SELECT COUNT(*) AS count FROM schedule_accounts WHERE schedule_id=?', (schedule_id,))['count']
+        schedule['network_route'] = json.loads(schedule['network_route'])
         return schedule
 
     def save_schedule(payload, schedule_id=None):
         now = time.time()
         with store.transaction() as connection:
+            validate_route(store, payload.network_route, connection)
             keep_accounts = bool(schedule_id and payload.keep_accounts)
             if not keep_accounts:
                 count = store.selection_count(payload, connection=connection)
@@ -177,6 +205,7 @@ def settings_router(store, auth):
             if not keep_accounts:
                 connection.execute('INSERT INTO schedule_accounts(schedule_id,account_id) SELECT ?,id FROM accounts WHERE ' + where,
                                    [schedule_id, *values])
+            connection.execute('UPDATE schedules SET network_route=? WHERE id=?', (payload.network_route.model_dump_json(), schedule_id))
         return {'id': schedule_id}
 
     @router.post('/schedules')

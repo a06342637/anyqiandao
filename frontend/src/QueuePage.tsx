@@ -34,7 +34,7 @@ export default function QueuePage({ onLogs, timezone }: { onLogs: (jobId: string
     try {
       await api(`/queue/${action}`, 'POST');
       refreshData();
-      toast(action === 'pause' ? '队列已暂停，正在执行的任务会继续完成' : action === 'resume' ? '队列已继续，按已保存的并发数量执行' : '全部等待任务已取消', 'success');
+      toast(action === 'pause' ? '队列已暂停，正在执行的任务会继续完成' : action === 'resume' ? '队列已继续，所有任务逐个执行' : '全部等待任务已取消', 'success');
     } catch (caught) { toast((caught as Error).message, 'error'); } finally { setBusy(false); }
   };
   const remove = async (job: Job) => {
@@ -58,12 +58,13 @@ export default function QueuePage({ onLogs, timezone }: { onLogs: (jobId: string
   };
   return <div className="queue-page">
     <div className="queue-overview">
-      <div className="queue-lane-summary"><span className="heading-icon"><Layers3 size={19} /></span><div><strong>普通队列</strong><p>提取 · 检测 · 数据查询 · 代理测试</p></div><span className="queue-lane-count"><b>{counts?.queue_running ?? '—'}</b> 执行中<small>{counts?.queue_pending ?? '—'} 个等待 · 并发 {data?.max_concurrency ?? '—'}</small></span></div>
-      <div className="queue-lane-summary"><span className="heading-icon"><CalendarClock size={19} /></span><div><strong>签到队列</strong><p>手动签到与所有定时计划统一排队</p></div><span className="queue-lane-count"><b>{counts?.checkin_running ?? '—'}</b> 执行中<small>{counts?.checkin_pending ?? '—'} 个等待 · 并发 {data?.checkin_concurrency ?? '—'}</small></span></div>
+      <div className="queue-lane-summary"><span className="heading-icon"><Layers3 size={19} /></span><div><strong>普通队列</strong><p>提取 · 检测 · 数据查询 · 代理测试</p></div><span className="queue-lane-count"><b>{counts?.queue_running ?? '—'}</b> 执行中<small>{counts?.queue_pending ?? '—'} 个等待 · 共用全局执行位</small></span></div>
+      <div className="queue-lane-summary"><span className="heading-icon"><CalendarClock size={19} /></span><div><strong>签到队列</strong><p>手动签到与所有定时计划统一排队</p></div><span className="queue-lane-count"><b>{counts?.checkin_running ?? '—'}</b> 执行中<small>{counts?.checkin_pending ?? '—'} 个等待 · 共用全局执行位</small></span></div>
     </div>
     {data && <ConcurrencyForm settings={data} />}
+    {data?.resource_wait && <div className="notice warning">{data.resource_wait}</div>}
     <section className="panel queue-panel">
-      <div className="panel-heading"><div className="heading-icon"><ListOrdered size={19} /></div><div><h2>执行任务</h2><p>自动刷新进度 · 同一账号始终串行</p></div><div className="panel-tools"><RefreshButton onClick={async () => { const loaded = await reload(); if (loaded) refreshData(); return loaded; }} /><Button disabled={!data} busy={busy} onClick={() => void control(data?.paused ? 'resume' : 'pause')}>{data?.paused ? <Play size={15} /> : <Pause size={15} />}{data?.paused ? '继续队列' : '暂停队列'}</Button></div></div>
+      <div className="panel-heading"><div className="heading-icon"><ListOrdered size={19} /></div><div><h2>执行任务</h2><p>自动刷新进度 · 全部任务共享一个执行位</p></div><div className="panel-tools"><RefreshButton onClick={async () => { const loaded = await reload(); if (loaded) refreshData(); return loaded; }} /><Button disabled={!data} busy={busy} onClick={() => void control(data?.paused ? 'resume' : 'pause')}>{data?.paused ? <Play size={15} /> : <Pause size={15} />}{data?.paused ? '继续队列' : '暂停队列'}</Button></div></div>
       <div className="queue-meta"><span className={`live-dot ${data?.paused ? 'paused' : ''}`} /><span>{data?.paused ? '队列已暂停' : '按入队顺序领取任务'}</span><button disabled={busy || !data || !counts || counts.queue_pending + counts.checkin_pending === 0} className="text-button push-right" onClick={() => void control('cancel-pending')}>取消全部等待任务</button></div>
       <ErrorNotice message={error} retry={reload} />
       {data?.paused && <div className="notice warning">{data.pause_reason || '已暂停新任务，点击「继续队列」恢复执行。'}</div>}
@@ -81,19 +82,5 @@ export default function QueuePage({ onLogs, timezone }: { onLogs: (jobId: string
 }
 
 function ConcurrencyForm({ settings }: { settings: QueueSettings }) {
-  const toast = useToast();
-  const [draft, setDraft] = useState<QueueSettings | null>(null);
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const values = draft || settings;
-  useEffect(() => { if (!dirty && !saving && draft?.max_concurrency === settings.max_concurrency && draft.checkin_concurrency === settings.checkin_concurrency) setDraft(null); }, [settings.max_concurrency, settings.checkin_concurrency, dirty, saving, draft]);
-  const save = async (event: FormEvent) => {
-    event.preventDefault(); setSaving(true);
-    try {
-      const result = await api<QueueSettings>('/queue/settings', 'PUT', values);
-      setDraft(result); setDirty(false); refreshData();
-      toast(`已生效：普通队列并发 ${result.max_concurrency}，签到并发 ${result.checkin_concurrency}；暂停状态保持不变`, 'success');
-    } catch (caught) { toast((caught as Error).message, 'error'); } finally { setSaving(false); }
-  };
-  return <form className="panel concurrency-panel" onSubmit={save}><div className="concurrency-heading"><h2>并发设置</h2><p>两条队列分别限流，保存后立即生效</p></div><div className="concurrency-fields">{([{ key: 'max_concurrency', label: '队列并发' }, { key: 'checkin_concurrency', label: '签到并发' }] as const).map(item => <label className="field" key={item.key}>{item.label}<select disabled={saving} value={values[item.key]} onChange={event => { setDirty(true); setDraft({ max_concurrency: values.max_concurrency, checkin_concurrency: values.checkin_concurrency, [item.key]: Number(event.target.value) }); }}>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value === 1 ? '1 个 · 依次执行' : `${value} 个 · 同时执行`}</option>)}</select></label>)}<Button variant="primary" type="submit" busy={saving}><Save size={16} />保存并发</Button></div><p className="concurrency-hint">签到默认 1 个，即使多个计划同时到点也会排队。提高并发会补充执行名额；降低并发不会强行中断已有任务。两类任务最多合计 {values.max_concurrency + values.checkin_concurrency} 个，启动间隔仍按运行设置执行。</p></form>;
+  return <section className="panel concurrency-panel"><div className="concurrency-heading"><h2>全局串行执行</h2><p>同时最多一个网络任务，当前任务及浏览器清理完毕后才领取下一个。</p></div><p className="concurrency-hint">手动签到、全部定时计划、登录、提取、检测和数据查询共用同一个执行位。适合 1GB 小服务器；增加账号或计划不会增加并发。</p></section>;
 }

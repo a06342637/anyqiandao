@@ -59,43 +59,41 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
         result = (await self.client.post('/api/v1/accounts/import', json=payload)).json()
         self.assertEqual((result['queued'], result['duplicate_count']), (1, 2))
 
-    async def test_two_lanes_and_same_account_exclusion(self):
+    async def test_all_lanes_share_one_slot_and_fifo_order(self):
         first, identifier = self.enqueue()
-        self.store.enqueue('checkin', identifier)
+        same, _ = self.store.enqueue('checkin', identifier)
         second, _ = self.enqueue()
         signin, _ = self.enqueue('checkin')
-        self.assertEqual(self.engine.claim()['id'], first)
-        self.assertEqual(self.engine.claim()['id'], signin)
+        job = self.engine.claim()
+        self.assertEqual(job['id'], first)
         self.assertIsNone(self.engine.claim())
-        await self.limits(2, 3)
-        self.assertEqual(self.engine.claim()['id'], second)
+        await self.limits(5, 5)
+        self.assertEqual((self.store.settings().max_concurrency, self.store.settings().checkin_concurrency), (1, 1))
         self.assertIsNone(self.engine.claim())
+        await self.engine.process(job)
+        for expected in (same, second, signin):
+            job = self.engine.claim()
+            self.assertEqual(job['id'], expected)
+            self.assertIsNone(self.engine.claim())
+            await self.engine.process(job)
 
-    async def test_live_raise_and_lower_does_not_interrupt_existing_jobs(self):
+    async def test_legacy_parallel_setting_cannot_start_another_browser(self):
         slots = []
-
         async def validate(*args):
             gate = asyncio.Event()
             slots.append(gate)
             await gate.wait()
             return {'quota': 10}
-
         self.service.validate = AsyncMock(side_effect=validate)
-        for index in range(8):
+        for index in range(3):
             self.enqueue()
         await self.engine.start()
         await self.until(lambda: len(slots) == 1)
-        await self.limits(3, 1)
-        await self.until(lambda: len(slots) == 3)
-        await self.limits(1, 1)
+        await self.limits(3, 2)
+        self.assertEqual(len(slots), 1)
+        self.assertEqual(len(self.engine.running), 1)
         slots[0].set()
-        await self.until(lambda: len(self.engine.running) == 2)
-        self.assertEqual(len(slots), 3)
-        slots[1].set()
-        await self.until(lambda: len(self.engine.running) == 1)
-        self.assertEqual(len(slots), 3)
-        slots[2].set()
-        await self.until(lambda: len(slots) == 4)
+        await self.until(lambda: len(slots) == 2)
         self.assertEqual(len(self.engine.running), 1)
 
     async def test_fourteen_due_schedules_share_serial_checkin_lane(self):
@@ -128,9 +126,11 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.start()
         await self.until(lambda: self.service.checkin.await_count == 1)
         await self.limits(1, 2)
-        await self.until(lambda: self.service.checkin.await_count == 2)
-        self.assertEqual(len(self.engine.running), 2)
-        self.assertEqual(self.store.one("SELECT COUNT(*) AS count FROM jobs WHERE status='pending'")['count'], 4)
+        self.assertEqual(self.service.checkin.await_count, 1)
+        self.assertEqual(len(self.engine.running), 1)
+        self.assertEqual(self.store.one("SELECT COUNT(*) AS count FROM jobs WHERE status='pending'")['count'], 5)
+        gate.set()
+        await self.until(lambda: self.service.checkin.await_count == 6)
 
     async def test_pending_delete_preserves_account_logs_and_tracking(self):
         job_id, identifier = self.enqueue('extract')
@@ -219,10 +219,16 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_proxy_logs_identify_routes_without_secrets(self):
         self.store.set_meta('settings', self.store.settings().model_copy(update={'proxy_mode': 'pool'}).model_dump_json())
+        proxy_ids = []
         for index in range(2):
             identifier = uuid.uuid4().hex
+            proxy_ids.append(identifier)
             config = {'scheme': 'http', 'host': f'127.0.0.{index + 2}', 'port': 8080, 'username': 'proxy-user', 'password': 'proxy-secret'}
             self.store.execute('INSERT INTO proxies(id,name,config_enc,created) VALUES (?,?,?,?)', (identifier, f'node-{index}', self.store.vault.seal(config, f'proxy:{identifier}'), time.time()))
+
+        routes = self.store.settings().operation_routes.model_dump()
+        routes['extract'] = {'mode': 'proxy', 'proxy_id': proxy_ids[0]}
+        self.assertEqual((await self.client.put('/api/v1/settings/routes', json=routes)).status_code, 200)
 
         class Bridge:
             def __init__(self, config, *args):
@@ -235,17 +241,19 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         async def extract(username, password, route, settings):
-            if route.config['host'] == '127.0.0.2':
+            if route is not None:
                 raise TaskError('proxy_error', 'synthetic network failure', retry_proxy=True)
             return {'session': 'private-cookie-value', 'api_user': '42', 'quota': 10}
 
         self.service.extract = AsyncMock(side_effect=extract)
         job_id, _ = self.enqueue('extract')
-        with patch('app.engine.ProxyBridge', Bridge):
+        with patch('app.engine.ProxyBridge', Bridge), patch('app.engine.asyncio.sleep', new=AsyncMock()):
             self.assertEqual((await self.run_next())['status'], 'success')
         messages = '\n'.join(row['message'] for row in self.store.all('SELECT message FROM logs WHERE job_id=?', (job_id,)))
-        self.assertIn('代理：node-0 · http://127.0.0.2:8080', messages)
-        self.assertIn('代理：node-1 · http://127.0.0.3:8080', messages)
+        self.assertIn('代理：node-0', messages)
+        self.assertIn('直连替补', messages)
+        self.assertNotIn('代理：node-1', messages)
+        self.assertEqual(self.service.extract.await_count, 6)
         self.assertNotIn('proxy-secret', messages)
         self.assertNotIn('private-cookie-value', messages)
 
@@ -259,7 +267,7 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
         await self.limits(3, 2)
         response = await self.client.put('/api/v1/settings', json=stale | {'auto_checkin': True, 'auto_checkin_interval_minutes': 60})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual((self.store.settings().max_concurrency, self.store.settings().checkin_concurrency), (3, 2))
+        self.assertEqual((self.store.settings().max_concurrency, self.store.settings().checkin_concurrency), (1, 1))
         self.assertEqual(self.store.one('SELECT * FROM schedules WHERE id=?', (schedule_id,)), original)
 
     async def test_partial_settings_never_enable_default_schedule(self):
@@ -291,7 +299,7 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
         self.store.execute('PRAGMA user_version=4')
         migrated = Store(self.config.data_dir, Vault(self.config.key))
         self.assertEqual(migrated.one('PRAGMA user_version')['user_version'], SCHEMA_VERSION)
-        self.assertEqual((migrated.settings().max_concurrency, migrated.settings().checkin_concurrency), (3, 1))
+        self.assertEqual((migrated.settings().max_concurrency, migrated.settings().checkin_concurrency), (1, 1))
         self.assertEqual(migrated.one('SELECT hidden FROM jobs WHERE id=?', (job_id,))['hidden'], 0)
         self.assertEqual(migrated.stored_password(identifier), 'test-account-password')
 

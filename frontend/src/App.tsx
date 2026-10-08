@@ -14,11 +14,11 @@ import SettingsPanel from './SettingsPanel';
 type Page = 'dashboard' | 'extract' | 'accounts' | 'schedules' | 'logs' | 'queue';
 const navigation = [
   { id: 'dashboard' as const, label: '仪表盘', icon: Gauge, description: '签到次数、新增余额和账号余额，按天 / 周 / 月统计。' },
-  { id: 'extract' as const, label: '凭证提取', icon: KeyRound, description: '添加新账号，按队列并发登录并取回 session 与 api_user。' },
+  { id: 'extract' as const, label: '凭证提取', icon: KeyRound, description: '添加新账号，依次登录并取回 session 与 api_user。' },
   { id: 'accounts' as const, label: '账号列表', icon: Users, description: '检测凭证是否仍然有效，复制配置，或重新提取。' },
   { id: 'schedules' as const, label: '签到管理', icon: CalendarClock, description: '选择账号、设定间隔，按计划运行内置签到脚本。' },
   { id: 'logs' as const, label: '运行日志', icon: ListChecks, description: '每一次提取、检测和签到的结果都在这里；不记录密码与 Cookie。' },
-  { id: 'queue' as const, label: '执行队列', icon: ListOrdered, description: '统一管理任务、调整普通队列与签到并发，实时查看执行进度。' },
+  { id: 'queue' as const, label: '执行队列', icon: ListOrdered, description: '统一管理任务，所有操作依次执行，实时查看进度。' },
 ];
 
 function initialTheme(): 'light' | 'dark' {
@@ -154,13 +154,14 @@ export default function App() {
         </div>
       </aside>
       <main className="workspace">
-        <div className="page-heading"><div><h1>{current.label}</h1><p>{current.description}</p></div><span className={`workspace-chip ${dashboard?.proxy_mode === 'direct' ? 'direct' : ''}`}><ShieldCheck size={14} />{dashboard?.proxy_mode === 'direct' ? '直连模式（已明确选择）' : `代理模式 · ${dashboard?.enabled_proxies ?? 0} 个启用节点`}</span></div>
+        <div className="page-heading"><div><h1>{current.label}</h1><p>{current.description}</p></div><span className="workspace-chip"><ShieldCheck size={14} />全局串行 · 线路按操作设置</span></div>
         <ErrorNotice message={dashboardError} retry={reload} />
+        {dashboard?.resource_wait && <div className="notice warning">{dashboard.resource_wait}</div>}
         {dashboard?.storage_error && <div className="notice warning" role="alert">存储出现异常，执行器已停止。请检查空间和磁盘权限，再重启本项目；不会自动删除凭证。</div>}
         {page === 'dashboard' && <div className="stats-grid">
           <Stat icon={<Users size={17} />} label="管理账号" value={dashboard?.accounts.total} caption={dashboard ? `${dashboard.accounts.extracted} 个已提取凭证` : '所有导入的账号'} />
           <Stat icon={<ShieldCheck size={17} />} label="有效凭证" value={dashboard?.accounts.valid} caption={dashboard?.accounts.invalid ? `${dashboard.accounts.invalid} 个已失效，需要更新凭证` : '以最近一次检测结果为准'} tone={dashboard?.accounts.invalid ? 'warning-text' : ''} />
-          <Stat icon={<Layers3 size={17} />} label="等待执行" value={dashboard?.jobs.pending} caption={dashboard?.paused ? '队列已暂停' : `普通并发 ${dashboard?.max_concurrency || 1} · 签到并发 ${dashboard?.checkin_concurrency || 1}`} tone={dashboard?.paused ? 'warning-text' : ''} />
+          <Stat icon={<Layers3 size={17} />} label="等待执行" value={dashboard?.jobs.pending} caption={dashboard?.paused ? '队列已暂停' : '全局并发 1 · 全部任务依次执行'} tone={dashboard?.paused ? 'warning-text' : ''} />
           <div className="stat-card"><div className="stat-label">下一次计划签到<CalendarClock size={17} /></div><div className="stat-value compact">{dashboard?.next_run ? formatTime(dashboard.next_run, timezone) : '尚未安排'}</div><span className="stat-caption">{dashboard?.next_run ? `时区 ${timezone}` : '在签到管理中创建计划'}</span></div>
         </div>}
         {page === 'dashboard' && <DashboardPage timezone={timezone} onLogs={openLogs} />}

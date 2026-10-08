@@ -1,7 +1,7 @@
 name: any-signin-assistant
 services:
   app:
-    image: ${APP_IMAGE:-any-signin-assistant:0.5.3}
+    image: ${APP_IMAGE:-any-signin-assistant:0.6.0}
     build: .
     init: true
     restart: unless-stopped
@@ -26,10 +26,11 @@ services:
       - admin_hash
     read_only: true
     tmpfs:
-      - /tmp:size=536870912,mode=1777
-    shm_size: 512mb
-    mem_limit: 2g
-    cpus: 2.0
+      - /tmp:size=134217728,mode=1777
+    shm_size: 128mb
+    mem_limit: ${APP_MEMORY_LIMIT:-640m}
+    memswap_limit: ${APP_MEMORY_SWAP_LIMIT:-1g}
+    cpus: ${APP_CPU_LIMIT:-1.0}
     pids_limit: 256
     cap_drop:
       - ALL

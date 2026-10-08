@@ -12,8 +12,9 @@ from app.db import checkin_earned
 from app.errors import HostKeyRequired, TaskError
 from app.proxy import ProxyBridge, detect_protocol
 from app.router_service import RouterService, quota_of
-from app.schemas import RuntimeSettings
 from app.worker_lock import WorkerLock
+from app.network_routes import OPERATION_LABELS, route_for
+from app.resources import memory_status
 
 
 class Engine:
@@ -25,6 +26,7 @@ class Engine:
         self.clock_task = None
         self.running = {}
         self.storage_error = False
+        self.resource_wait = ''
         self.loop = None
         self.lock = WorkerLock(store.path.parent / '.worker.lock')
 
@@ -92,24 +94,12 @@ class Engine:
             if maintenance and maintenance['value'] == '1':
                 return None
             paused = connection.execute("SELECT value FROM meta WHERE key='queue_paused'").fetchone()['value'] == '1'
-            settings = RuntimeSettings.model_validate_json(connection.execute("SELECT value FROM meta WHERE key='settings'").fetchone()['value'])
             active = {row['id']: dict(row) for row in connection.execute("SELECT id,kind,account_id FROM jobs WHERE status='running'")}
             active.update({identifier: job for identifier, (job, _) in self.running.items()})
-            checkins = sum(job['kind'] == 'checkin' for job in active.values())
-            lanes = []
-            if checkins < settings.checkin_concurrency and not paused:
-                lanes.append("kind='checkin'")
-            if len(active) - checkins < settings.max_concurrency:
-                lanes.append("kind='proxy_test'" if paused else "kind!='checkin'")
-            if not lanes:
+            if active:
                 return None
-            active_accounts = list({job['account_id'] for job in active.values() if job['account_id']})
-            query = ("SELECT * FROM jobs WHERE status='pending'" + (" AND kind='proxy_test'" if paused else '')
-                     + " AND (account_id IS NULL OR account_id NOT IN (SELECT account_id FROM jobs WHERE status='running' AND account_id IS NOT NULL))"
-                     + ' AND (' + ' OR '.join(lanes) + ')')
-            if active_accounts:
-                query += ' AND (account_id IS NULL OR account_id NOT IN (' + ','.join('?' for _ in active_accounts) + '))'
-            job = connection.execute(query + ' ORDER BY created,rowid LIMIT 1', active_accounts).fetchone()
+            query = "SELECT * FROM jobs WHERE status='pending'" + (" AND kind='proxy_test'" if paused else '')
+            job = connection.execute(query + ' ORDER BY created,rowid LIMIT 1').fetchone()
             if not job:
                 return None
             connection.execute("UPDATE jobs SET status='running',started=?,message='正在执行' WHERE id=?", (time.time(), job['id']))
@@ -127,6 +117,12 @@ class Engine:
                     self.store.set_meta('pause_reason', '数据盘可用空间不足 64MB，请释放空间后继续')
                     await asyncio.sleep(5)
                     continue
+                if not self.running:
+                    resources = memory_status()
+                    self.resource_wait = '' if resources['ready'] else '内存暂时不足，等待释放后自动继续；不会启动新的浏览器'
+                    if self.resource_wait:
+                        await asyncio.sleep(3)
+                        continue
                 settings = self.store.settings()
                 gap = settings.account_gap - (time.monotonic() - last_started)
                 if gap > 0:
@@ -185,46 +181,9 @@ class Engine:
                 raise TaskError('password_required', '没有保存登录密码，请重新输入后提取')
             settings = self.store.settings()
             job['_repair_invalid'] = payload.get('repair_invalid', settings.auto_reextract)
-            if settings.proxy_mode == 'direct':
-                job['_route_label'] = '直连 · 未使用代理'
-                self.log_job(job, '使用服务器网络出口执行任务')
-                await self.perform(job, account, password, None, settings, None)
-                return
-            job['_route_label'] = '代理池 · 尚未连接节点'
-            candidates = self.candidates()
-            for position, proxy in enumerate(candidates):
-                job['_route_label'] = f'代理：{proxy["name"]}（{proxy["id"][:8]}）'
-                self.store.set_meta('proxy_last_id', proxy['id'])
-                # Rotating gateways hand out a new exit IP per connection, so one transient drop deserves a second try on the same node.
-                for attempt in range(2):
-                    self.store.execute('UPDATE jobs SET message=? WHERE id=?', (f'正在尝试代理 {position + 1}/{len(candidates)}' + ('（重试）' if attempt else ''), job['id']))
-                    try:
-                        config = await self.proxy_config(proxy, settings)
-                        job['_route_label'] = f'代理：{proxy["name"]} · {config["scheme"]}://{config["host"]}:{config["port"]}'
-                        self.log_job(job, f'连接节点 {position + 1}/{len(candidates)}' + ('，同节点重试' if attempt else ''))
-                        async with ProxyBridge(config, settings.connect_timeout, proxy['trusted_key']) as route:
-                            await self.perform(job, account, password, route, settings, proxy['id'])
-                        self.store.execute("UPDATE proxies SET status='healthy',message='连接正常',failed_until=0 WHERE id=?", (proxy['id'],))
-                        self.store.set_meta('proxy_last_id', proxy['id'])
-                        return
-                    except HostKeyRequired as error:
-                        self.require_host_key(proxy, error)
-                        self.log_job(job, '节点需要确认 SSH 指纹，尝试下一个节点', level='warning')
-                        break
-                    except TaskError as error:
-                        if not error.retry_proxy:
-                            raise
-                        if attempt == 0:
-                            self.log_job(job, f'节点网络波动，同节点重试一次：{error.message}', level='warning')
-                            continue
-                        self.mark_proxy_failure(proxy, error.message)
-                        self.log_job(job, f'节点连接失败，切换下一个：{error.message}', level='warning')
-            with self.store.transaction() as connection:
-                reason = '没有可用代理，队列已暂停；请检查代理、确认 SSH 指纹或明确选择直连模式后继续'
-                connection.execute("UPDATE jobs SET status='pending',started=NULL,message=? WHERE id=?", (reason, job['id']))
-                connection.execute("UPDATE meta SET value='1' WHERE key='queue_paused'")
-                connection.execute("UPDATE meta SET value=? WHERE key='pause_reason'", (reason,))
-            self.log_job(job, reason, level='warning')
+            job['_route_operation'] = payload.get('route_operation', 'extract')
+            await self.perform(job, account, password, None, settings, None)
+
         except TaskError as error:
             if job['account_id']:
                 now = time.time()
@@ -248,6 +207,57 @@ class Engine:
         except Exception as error:
             self.finish(job, 'error', f'任务执行异常（{type(error).__name__}）；未覆盖已有凭证')
 
+    async def routed(self, job, account, operation, settings, callback):
+        selected = route_for(self.store, settings, job, account, operation)
+        label = OPERATION_LABELS[operation]
+        async def invoke(route):
+            if not memory_status()['ready']:
+                raise TaskError('resource_busy', '可用内存不足，本次停止启动浏览器；等待资源释放后重试')
+            try:
+                async with asyncio.timeout(settings.login_timeout + (90 if operation == 'checkin' else 0)):
+                    return await callback(route)
+            except TimeoutError:
+                if job.get('_checkin_submitted'):
+                    raise TaskError('uncertain', '签到请求已发出但操作超时，停止重试，不重复提交') from None
+                raise TaskError('network_error', label + '网络操作超时', retry_proxy=True) from None
+            except (TaskError, httpx.TransportError, OSError) as error:
+                if job.get('_checkin_submitted') and (not isinstance(error, TaskError) or error.retry_proxy):
+                    raise TaskError('uncertain', '签到请求已发出但结果未确认，停止重试，不重复提交') from None
+                raise
+        if selected.mode == 'direct':
+            job['_route_label'] = f'{label} · 直连'
+            self.log_job(job, '使用服务器网络出口执行')
+            return await invoke(None), None
+        proxy = self.store.one('SELECT * FROM proxies WHERE id=? AND enabled=1', (selected.proxy_id,))
+        if not proxy:
+            raise TaskError('proxy_error', '指定代理已删除或停用，请重新选择；未使用其他代理')
+        for attempt in range(1, 6):
+            job['_route_label'] = f'{label} · 代理：{proxy["name"]}（{proxy["id"][:8]}）'
+            self.log_job(job, f'指定代理第 {attempt}/5 次尝试')
+            self.store.execute('UPDATE jobs SET message=? WHERE id=?', (f'{label}：代理第 {attempt}/5 次尝试', job['id']))
+            try:
+                config = await self.proxy_config(proxy, settings)
+                async with ProxyBridge(config, settings.connect_timeout, proxy['trusted_key']) as route:
+                    result = await invoke(route)
+                self.store.execute("UPDATE proxies SET status='healthy',message='连接正常',failed_until=0 WHERE id=?", (proxy['id'],))
+                return result, proxy['id']
+            except HostKeyRequired as error:
+                self.require_host_key(proxy, error)
+                raise
+            except (TaskError, httpx.TransportError, OSError) as error:
+                if isinstance(error, TaskError) and not error.retry_proxy:
+                    raise
+                if job.get('_checkin_submitted'):
+                    raise TaskError('uncertain', '签到请求已发出但结果未确认，停止代理重试与直连补发') from None
+                message = error.message if isinstance(error, TaskError) else '代理连接失败或连接中断'
+                self.log_job(job, f'第 {attempt}/5 次代理失败：{message}', level='warning')
+                if attempt < 5:
+                    await asyncio.sleep(min(attempt, 3))
+        self.mark_proxy_failure(proxy, '指定代理连续 5 次网络失败，本次已转直连')
+        job['_route_label'] = f'{label} · 直连替补'
+        self.log_job(job, '指定代理 5 次网络尝试均失败，使用直连完成本次操作', level='warning')
+        return await invoke(None), None
+
     def after_extract(self, job, account):
         settings = self.store.settings()
         if not settings.auto_checkin and job['source'] != 'auto:reextract':
@@ -262,15 +272,6 @@ class Engine:
             self.store.log('extract', '已自动加入默认签到计划', job_id=job['id'], account_id=account['id'])
         if inserted:
             self.store.log('extract', '已自动加入一次签到任务', job_id=job['id'], account_id=account['id'])
-
-    def candidates(self):
-        proxies = self.store.all("SELECT * FROM proxies WHERE enabled=1 AND failed_until<=? AND status!='needs_trust' ORDER BY created,rowid", (time.time(),))
-        last = self.store.meta('proxy_last_id')
-        for position, proxy in enumerate(proxies):
-            if proxy['id'] == last:
-                proxies = proxies[position + 1:] + proxies[:position + 1]
-                break
-        return proxies
 
     async def proxy_config(self, proxy, settings):
         config = self.store.vault.open(proxy['config_enc'], f'proxy:{proxy["id"]}')
@@ -314,7 +315,8 @@ class Engine:
 
     async def perform(self, job, account, password, route, settings, proxy_id):
         if job['kind'] == 'insights':
-            result = await self.service.insights(account['result'], route, settings, job['_insight_options'])
+            operation = 'tokens' if job['_insight_options']['view'] == 'tokens' else 'dashboard'
+            result, proxy_id = await self.routed(job, account, operation, settings, lambda active_route: self.service.insights(account['result'], active_route, settings, job['_insight_options']))
             now = time.time()
             label = 'API 令牌' if job['_insight_options']['view'] == 'tokens' else '数据看板'
             with self.store.transaction() as connection:
@@ -329,11 +331,7 @@ class Engine:
                 connection.execute("UPDATE jobs SET status='success',message=?,payload_enc=NULL,finished=? WHERE id=?", (f'{label}已读取；只读查询，未登录、未签到、未修改令牌', now, job['id']))
             self.log_job(job, f'{label}查询完成，结果加密暂存 10 分钟；日志不包含令牌或 Cookie')
         elif job['kind'] == 'extract':
-            try:
-                async with asyncio.timeout(settings.login_timeout):
-                    result = await self.service.extract(account['login']['username'], password, route, settings)
-            except TimeoutError:
-                raise TaskError('login_error', '登录达到总时限，未获取完整凭证；请检查网站或人工验证') from None
+            result, proxy_id = await self.routed(job, account, job.get('_route_operation', 'extract'), settings, lambda active_route: self.service.extract(account['login']['username'], password, active_route, settings))
             if not result.get('session') or not str(result.get('api_user', '')).isdigit():
                 raise TaskError('missing_session', '登录没有返回完整 session 和用户 ID，不判定为成功')
             now = time.time()
@@ -346,14 +344,14 @@ class Engine:
             try:
                 if not account['result']:
                     raise TaskError('invalid', '缺少登录凭证，请先提取')
-                result = await self.service.validate(account['result'], route, settings)
+                result, proxy_id = await self.routed(job, account, 'validate', settings, lambda active_route: self.service.validate(account['result'], active_route, settings))
             except TaskError as error:
                 if error.code != 'invalid' or not job.get('_repair_invalid', settings.auto_reextract):
                     raise
                 self.store.execute("UPDATE accounts SET validity='invalid',message=?,last_validated=?,updated=? WHERE id=?",
                                    (error.message, time.time(), time.time(), account['id']))
                 await self.refresh_credentials(job, account, password, route, settings, proxy_id)
-                result = await self.service.validate(account['result'], route, settings)
+                result, proxy_id = await self.routed(job, account, 'validate', settings, lambda active_route: self.service.validate(account['result'], active_route, settings))
                 refreshed = True
             now = time.time()
             message = '失效凭证已自动重新提取并验证有效' if refreshed else '凭证有效'
@@ -367,13 +365,14 @@ class Engine:
                 await self.refresh_for_checkin(job, account, password, route, settings, proxy_id)
                 refreshed = True
             try:
-                result = await self.checkin_or_observed(job, account, route, settings)
+                result, proxy_id = await self.routed(job, account, 'checkin', settings, lambda active_route: self.checkin_or_observed(job, account, active_route, settings))
             except TaskError as error:
                 if error.code != 'invalid' or refreshed:
                     raise
                 job['_checkin_started'] = False
+                job['_checkin_submitted'] = False
                 await self.refresh_for_checkin(job, account, password, route, settings, proxy_id)
-                result = await self.checkin_or_observed(job, account, route, settings)
+                result, proxy_id = await self.routed(job, account, 'checkin', settings, lambda active_route: self.checkin_or_observed(job, account, active_route, settings))
             result = self.resolve_checkin_receipt(account, result, settings)
             now = time.time()
             before, after = result.get('quota_before'), result.get('quota_after')
@@ -399,7 +398,8 @@ class Engine:
                 return observed
         job['_checkin_started'] = True
         return await self.service.checkin(account['result'], route, settings,
-                    before_submit=lambda profile, observed_at: self.checkin_precheck(account, quota_of(profile), quota_of(profile, 'used_quota'), observed_at))
+                    before_submit=lambda profile, observed_at: self.checkin_precheck(account, quota_of(profile), quota_of(profile, 'used_quota'), observed_at),
+                    on_submit=lambda: job.update(_checkin_submitted=True))
 
     def checkin_precheck(self, account, quota, used, now):
         identity = account['result']['api_user']
@@ -464,12 +464,8 @@ class Engine:
         self.store.execute('UPDATE jobs SET message=? WHERE id=?',
                            (f'Cookie 已失效，正在自动重新提取，随后继续本次{operation}', job['id']))
         job['_credential_refresh_attempted'] = True
-        self.log_job(job, f'开始自动重新提取凭证，本次{operation}最多自动重登一次', kind='extract', category='invalid')
-        try:
-            async with asyncio.timeout(settings.login_timeout):
-                credentials = await self.service.extract(account['login']['username'], password, route, settings)
-        except TimeoutError:
-            raise TaskError('login_error', '自动重新提取超时，未提交签到；请检查账号或网站') from None
+        self.log_job(job, f'开始自动重新提取凭证，本次{operation}最多进行一轮自动凭证修复', kind='extract', category='invalid')
+        credentials, proxy_id = await self.routed(job, account, 'refresh', settings, lambda active_route: self.service.extract(account['login']['username'], password, active_route, settings))
         if not credentials.get('session') or not str(credentials.get('api_user', '')).isdigit():
             raise TaskError('missing_session', '自动重新提取未获得完整凭证，未提交签到')
         now = time.time()

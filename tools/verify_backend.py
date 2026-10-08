@@ -64,7 +64,7 @@ class FakeService:
         finally:
             self.active -= 1
 
-    async def checkin(self, credentials, route, settings, *, before_submit=None):
+    async def checkin(self, credentials, route, settings, *, before_submit=None, on_submit=None):
         await self.validate(credentials, route, settings)
         return {'code': 'signed', 'message': '合成测试：签到成功', 'quota': 3.0, 'quota_before': 2.0, 'quota_after': 3.0, 'logs': ['合成脚本测试，无外部请求']}
 
@@ -113,8 +113,8 @@ async def verify():
             check(repeated.json()['queued'] == 0 and repeated.json()['skipped'] == 100, 'idempotent chunk retry')
             pending = store.one("SELECT * FROM jobs WHERE status='pending' ORDER BY created LIMIT 1")
             check(store.vault.open(pending['payload_enc'], f'job:{pending["id"]}')['password'] == account_password, 'special password bytes preserved')
-            await engine.process(engine.claim())
-            check(store.meta('queue_paused') == '1', 'proxy mode without nodes pauses')
+            store.set_meta('queue_paused', '1')
+            check(engine.claim() is None, 'paused queue does not start browser tasks')
             pending = store.one('SELECT * FROM jobs WHERE id=?', (pending['id'],))
             check(pending['status'] == 'pending' and pending['payload_enc'], 'waiting for proxies retains encrypted input')
             check((await client.put('/api/v1/settings', json=settings)).status_code == 200, 'explicit direct mode setting')
@@ -128,7 +128,7 @@ async def verify():
                 check(True, 'exclusive global worker lock')
             await wait_empty(store)
             await engine.stop()
-            check(service.peak == 2, 'ordinary and check-in lanes each default to serial execution')
+            check(service.peak == 1, 'all browser operations share one global serial execution slot')
             first_extractions = list(dict.fromkeys(service.calls))
             check(len(first_extractions) == 105 and service.calls.count('fixture_0') == 2, 'imports run once and an expired first check-in retries extraction once')
             check(first_extractions[:103] == [f'fixture_{index}' for index in range(103)], 'FIFO import order preserved independently of automatic credential recovery')
@@ -258,7 +258,7 @@ async def verify():
             await engine.start()
             await wait_empty(store)
             await engine.stop()
-            check(3 <= service.peak <= 4, 'three ordinary tasks and one independent check-in lane respect their limits')
+            check(service.peak == 1, 'legacy concurrency values cannot override global serial execution')
             overlaps = store.one("SELECT COUNT(*) AS c FROM jobs a JOIN jobs b ON a.account_id=b.account_id AND a.id<b.id WHERE a.started IS NOT NULL AND b.started IS NOT NULL AND a.finished IS NOT NULL AND b.finished IS NOT NULL AND a.started<b.finished AND b.started<a.finished AND a.kind!=b.kind")['c']
             check(overlaps == 0, 'the same account is never processed by two workers at once')
             await client.put('/api/v1/settings', json=settings_now)

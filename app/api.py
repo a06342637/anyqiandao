@@ -30,7 +30,7 @@ def account_router(store, auth, engine):
         settings = store.settings()
         return {'accounts': {key: value or 0 for key, value in accounts.items()},
                 'jobs': {key: value or 0 for key, value in jobs.items()}, 'next_run': next_run['next_run'],
-                'paused': store.meta('queue_paused') == '1', 'pause_reason': store.meta('pause_reason'),
+                'paused': store.meta('queue_paused') == '1', 'pause_reason': store.meta('pause_reason'), 'resource_wait': engine.resource_wait, 'global_concurrency': 1,
                 'timezone': settings.timezone, 'proxy_mode': settings.proxy_mode,
                 'enabled_proxies': store.one('SELECT COUNT(*) AS count FROM proxies WHERE enabled=1')['count'],
                 'storage_error': engine.storage_error, 'max_concurrency': settings.max_concurrency, 'checkin_concurrency': settings.checkin_concurrency}
@@ -124,7 +124,7 @@ def account_router(store, auth, engine):
                         connection.execute('UPDATE accounts SET login_enc=?,updated=? WHERE id=?',
                                            (store.vault.seal(login | {'password': payload.password}, f'login:{account_id}'), time.time(), account_id))
                     job_id, inserted = store.enqueue('extract', account_id,
-                        payload={'password': password, 'only_if_invalid': payload.action == 'extract_invalid'}, connection=connection)
+                        payload={'password': password, 'only_if_invalid': payload.action == 'extract_invalid', 'route_operation': 'refresh' if row['result_enc'] else 'extract'}, connection=connection)
                 else:
                     if payload.action == 'validate' and not row['result_enc'] and not repair_invalid:
                         skipped += 1
@@ -306,7 +306,7 @@ def account_router(store, auth, engine):
         counts = store.one("SELECT SUM(status='pending' AND kind!='checkin') AS queue_pending,SUM(status='running' AND kind!='checkin') AS queue_running,SUM(status='pending' AND kind='checkin') AS checkin_pending,SUM(status='running' AND kind='checkin') AS checkin_running FROM jobs")
         settings = store.settings()
         return {'items': rows, 'total': store.one('SELECT COUNT(*) AS count FROM jobs WHERE ' + where)['count'], 'page': page, 'limit': limit,
-                'paused': store.meta('queue_paused') == '1', 'pause_reason': store.meta('pause_reason'), 'max_concurrency': settings.max_concurrency,
+                'paused': store.meta('queue_paused') == '1', 'pause_reason': store.meta('pause_reason'), 'resource_wait': engine.resource_wait, 'global_concurrency': 1, 'max_concurrency': settings.max_concurrency,
                 'checkin_concurrency': settings.checkin_concurrency, 'counts': {key: value or 0 for key, value in counts.items()}}
 
     @router.put('/queue/settings')

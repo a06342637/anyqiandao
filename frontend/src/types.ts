@@ -4,6 +4,7 @@ export interface CheckinBalance {
   created: number; balance_source: 'live' | 'legacy';
 }
 export interface Account {
+  checkin_route: NetworkRoute;
   id: string; username: string; validity: string; message: string; has_password: boolean; has_result: boolean;
   credential_source: 'password' | 'session' | 'missing';
   last_validated: number | null; last_extracted: number | null; last_checkin: number | null;
@@ -20,16 +21,19 @@ export interface JobStatus {
   username: string | null; validity: string | null; quota: number | null; proxy_name: string | null; balance: CheckinBalance | null;
 }
 export interface Dashboard {
+  resource_wait: string; global_concurrency: number;
   accounts: { total: number; valid: number; invalid: number; extracted: number };
   jobs: { pending: number; running: number }; next_run: number | null; paused: boolean; pause_reason: string; timezone: string;
   proxy_mode: 'pool' | 'direct'; enabled_proxies: number; storage_error: boolean; max_concurrency: number; checkin_concurrency: number;
 }
 export interface QueueSettings { max_concurrency: number; checkin_concurrency: number; }
 export interface QueueData extends PageData<Job>, QueueSettings {
+  resource_wait: string; global_concurrency: number;
   paused: boolean; pause_reason: string;
   counts: { queue_pending: number; queue_running: number; checkin_pending: number; checkin_running: number };
 }
 export interface Schedule {
+  network_route: NetworkRoute;
   id: string; name: string; interval_minutes: number; enabled: boolean; next_run: number;
   last_run: number | null; created: number; account_count: number; account_ids?: string[];
 }
@@ -40,11 +44,14 @@ export interface ProxyNode {
 }
 export interface SiteBranding { site_name: string; site_icon_text: string; }
 export interface RuntimeSettings extends SiteBranding {
+  operation_routes: OperationRoutes;
   proxy_mode: 'pool' | 'direct'; connect_timeout: number; login_timeout: number; account_gap: number;
   log_retention_days: number; queue_retention_days: number; log_cleanup_hours: number; log_cleanup_enabled: boolean; timezone: string;
   auto_checkin: boolean; auto_checkin_interval_minutes: number; auto_reextract: boolean;
   max_concurrency: number; checkin_concurrency: number; stats_retention_days: number;
 }
+export interface NetworkRoute { mode: 'inherit' | 'direct' | 'proxy'; proxy_id?: string | null; }
+export type OperationRoutes = Record<'extract' | 'refresh' | 'validate' | 'checkin' | 'tokens' | 'dashboard', NetworkRoute>;
 export interface SettingsData { settings: RuntimeSettings; version: string; script_revision: string; last_log_cleanup: number | null; next_log_cleanup: number | null; auto_schedule_id: string | null; }
 export interface CleanupResult { removed: number; logs: number; jobs: number; checkins: number; }
 export interface HistoryResult { removed: number; protected: number; }

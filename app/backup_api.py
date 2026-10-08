@@ -39,18 +39,20 @@ def backup_document(store):
             accounts.append({'username': login['username'], 'password': login.get('password'), 'note': row['note'], 'result': result,
                              'validity': row['validity'], 'message': row['message'], 'quota': row['quota'], 'checkin_status': row['checkin_status'],
                              'last_validated': row['last_validated'], 'last_extracted': row['last_extracted'], 'last_checkin': row['last_checkin'],
-                             'created': row['created'], 'updated': row['updated'], 'daily_checkin': daily.model_dump() if daily else None})
+                             'created': row['created'], 'updated': row['updated'], 'daily_checkin': daily.model_dump() if daily else None,
+                             'checkin_route': json.loads(row['checkin_route'])})
         usernames = {row['id']: account['username'] for row, account in zip(read('SELECT id FROM accounts ORDER BY position,created,rowid'), accounts)}
         schedules = []
         auto_id = metadata.get('auto_schedule_id')
         for row in read('SELECT * FROM schedules ORDER BY created'):
             members = [usernames[item['account_id']] for item in read('SELECT account_id FROM schedule_accounts WHERE schedule_id=?', (row['id'],)) if item['account_id'] in usernames]
             schedules.append({'name': row['name'], 'interval_minutes': row['interval_minutes'], 'enabled': bool(row['enabled']), 'next_run': row['next_run'],
-                              'last_run': row['last_run'], 'created': row['created'], 'accounts': members, 'auto': row['id'] == auto_id})
+                              'last_run': row['last_run'], 'created': row['created'], 'accounts': members, 'auto': row['id'] == auto_id,
+                              'network_route': json.loads(row['network_route'])})
         proxies = []
         for row in read('SELECT * FROM proxies ORDER BY created,rowid'):
             config = store.vault.open(row['config_enc'], f'proxy:{row["id"]}')
-            proxies.append({'name': row['name'], 'enabled': bool(row['enabled']), 'config': config, 'trusted_key': row['trusted_key'], 'created': row['created']})
+            proxies.append({'id': row['id'], 'name': row['name'], 'enabled': bool(row['enabled']), 'config': config, 'trusted_key': row['trusted_key'], 'created': row['created']})
         checkins = [{'username': usernames.get(row['account_id']), 'code': row['code'], 'quota_before': row['quota_before'], 'quota_after': row['quota_after'],
                      'used_before': row['used_before'], 'used_after': row['used_after'], 'reward_amount': row['reward_amount'], 'created': row['created'], 'balance_source': row['balance_source']}
                     for row in read('SELECT * FROM checkins ORDER BY created') if row['account_id'] in usernames]
@@ -110,6 +112,7 @@ def backup_router(store, auth):
             if connection.execute("SELECT 1 FROM jobs WHERE status='running' LIMIT 1").fetchone():
                 raise HTTPException(409, '有任务正在执行，请先暂停队列并等待完成后再恢复')
             ids_by_name = {}
+            schedule_routes, account_routes, proxy_ids = [], [], {}
             for item in accounts:
                 username = str(item.get('username', '')).strip()
                 if not username:
@@ -153,6 +156,8 @@ def backup_router(store, auth):
                                         item.get('checkin_status'), item.get('quota'), item.get('created') or now, now, str(item.get('note') or '')[:500]))
                     summary['accounts_added'] += 1
                 ids_by_name[username] = account_id
+                if item.get('checkin_route') is not None:
+                    account_routes.append((account_id, item['checkin_route']))
                 current = connection.execute('SELECT * FROM accounts WHERE id=?', (account_id,)).fetchone()
                 current_state = store.daily_state(current)
                 credentials = store.vault.open(current['result_enc'], f'result:{account_id}') if current['result_enc'] else {}
@@ -178,6 +183,8 @@ def backup_router(store, auth):
                     if username in ids_by_name:
                         connection.execute('INSERT OR IGNORE INTO schedule_accounts VALUES (?,?)', (schedule_id, ids_by_name[username]))
                 summary['schedules'] += 1
+                if item.get('network_route') is not None:
+                    schedule_routes.append((schedule_id, item['network_route']))
             for item in document.get('proxies') or []:
                 config = item.get('config') if isinstance(item, dict) else None
                 if not isinstance(config, dict) or not config.get('host') or not config.get('port'):
@@ -189,11 +196,28 @@ def backup_router(store, auth):
                         duplicate = True
                         break
                 if duplicate:
+                    if item.get('id'):
+                        proxy_ids[item['id']] = row['id']
                     continue
                 proxy_id = uuid.uuid4().hex
                 connection.execute('INSERT INTO proxies(id,name,config_enc,enabled,trusted_key,created) VALUES (?,?,?,?,?,?)',
                                    (proxy_id, str(item.get('name') or config['host'])[:100], store.vault.seal(config, f'proxy:{proxy_id}'), int(bool(item.get('enabled', True))), item.get('trusted_key'), item.get('created') or now))
                 summary['proxies'] += 1
+                if item.get('id'):
+                    proxy_ids[item['id']] = proxy_id
+            def mapped_route(route):
+                route = dict(route)
+                if route.get('mode') == 'proxy':
+                    route['proxy_id'] = proxy_ids.get(route.get('proxy_id'))
+                    if not route['proxy_id']:
+                        raise HTTPException(400, '备份中的线路缺少对应代理节点，未恢复数据；请使用包含代理的完整应用备份')
+                return route
+            for account_id, route in account_routes:
+                connection.execute('UPDATE accounts SET checkin_route=? WHERE id=?', (json.dumps(mapped_route(route)), account_id))
+            for schedule_id, route in schedule_routes:
+                connection.execute('UPDATE schedules SET network_route=? WHERE id=?', (json.dumps(mapped_route(route)), schedule_id))
+            if 'operation_routes' in restored_settings:
+                restored_settings['operation_routes'] = {name: mapped_route(route) for name, route in restored_settings['operation_routes'].items()}
             existing_checkins = {(row['account_id'], round(row['created'], 3)) for row in connection.execute('SELECT account_id,created FROM checkins').fetchall()}
             for item in document.get('checkins') or []:
                 if not isinstance(item, dict) or item.get('username') not in ids_by_name or not item.get('created'):

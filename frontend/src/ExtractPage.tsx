@@ -111,8 +111,8 @@ export default function ExtractPage({ onQueue, onAccounts, onSettings, dashboard
         <Button variant="primary" type="submit" busy={busy} className="full-width">{busy ? '正在提交…' : '加入提取队列'}<ArrowRight size={17} /></Button>
         {progress && <p className="import-progress" role="status">{progress}</p>}
       </form>}
-      {dashboard?.proxy_mode === 'pool' && !dashboard.enabled_proxies && <div className="notice warning compact-notice"><span>尚未添加代理。任务将等待，不会自动直连。</span><button className="text-button" onClick={onSettings}>前往设置</button></div>}
+      {dashboard && <div className="notice warning compact-notice"><span>默认直连；需要代理时，请到设置中为登录 / 提取指定线路。</span><button className="text-button" onClick={onSettings}>前往设置</button></div>}
     </section><aside className="guide-card"><span className="eyebrow">使用流程</span><h2>先提取，<br />再安排签到。</h2><div className="workflow-step"><span>01</span><div><strong>提取登录凭证</strong><p>隔离的浏览器会话逐个登录，取回 session 与 api_user。</p></div></div><div className="workflow-step"><span>02</span><div><strong>检测与管理账号</strong><p>确认凭证仍然有效，再复制配置或重新提取。</p></div></div><div className="workflow-step"><span>03</span><div><strong>安排自动签到</strong><p>选择账号与执行间隔，内置脚本按计划运行。</p></div></div><div className="guide-bottom"><ShieldCheck size={17} /><span>遇到验证码或风控就停下来提示你，不绕过人工验证。</span></div><Button onClick={onAccounts} className="guide-button">前往账号列表<ArrowRight size={16} /></Button></aside></div>
-    <div className="extract-queue-link"><span><ListOrdered size={17} />任务进度、暂停与并发设置已移至独立页面</span><Button onClick={onQueue}>前往执行队列<ArrowRight size={16} /></Button></div>
+    <div className="extract-queue-link"><span><ListOrdered size={17} />任务进度与暂停控制位于独立执行队列页面</span><Button onClick={onQueue}>前往执行队列<ArrowRight size={16} /></Button></div>
   </>;
 }

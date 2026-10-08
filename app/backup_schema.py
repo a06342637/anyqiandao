@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from app.db import SCHEMA_VERSION
 from app.checkin_state import DailyCheckinState
-from app.schemas import ProxyInput
+from app.schemas import NetworkRoute, ProxyInput
 
 Timestamp = Annotated[float, Field(ge=0, le=253402300799, allow_inf_nan=False, strict=True)]
 Balance = Annotated[float, Field(ge=-1e15, le=1e15, allow_inf_nan=False, strict=True)]
@@ -26,6 +26,7 @@ class BackupAccount(BaseModel):
     daily_checkin: DailyCheckinState | None = None
     created: Timestamp | None = None
     updated: Timestamp | None = None
+    checkin_route: NetworkRoute | None = None
 
     @field_validator('result')
     @classmethod
@@ -45,9 +46,11 @@ class BackupSchedule(BaseModel):
     created: Timestamp | None = None
     accounts: list[Username] = Field(default_factory=list, max_length=100000)
     auto: bool = False
+    network_route: NetworkRoute | None = None
 
 
 class BackupProxy(BaseModel):
+    id: str | None = Field(default=None, max_length=100)
     name: str = Field(default='', max_length=100)
     enabled: bool = True
     config: dict

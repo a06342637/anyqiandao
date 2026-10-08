@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Clock3, Code2, DatabaseBackup, LockKeyhole, Network, 
 import UpdatePanel from './UpdatePanel';
 import RemoteBackupPanel from './RemoteBackupPanel';
 import AppearancePanel from './AppearancePanel';
+import { OperationRouting } from './NetworkRouting';
 import { cleanupSummary } from './RetentionSettings';
 import { parseProxyLine } from './proxyParse';
 import { api, downloadBlob, fetchApi, formatTime, refreshData, useResource } from './api';
@@ -34,11 +35,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         {tab === 'runtime' && (data ? <RuntimeForm initial={data} /> : <p className="muted">正在读取设置…</p>)}
         {tab === 'appearance' && (data ? <AppearancePanel initial={data.settings} /> : <p className="muted">正在读取外观设置…</p>)}
         {tab === 'admin-password' && <AdminPasswordPanel />}
-        {tab === 'proxies' && <ProxyManager />}
+        {tab === 'proxies' && <><OperationRouting /><ProxyManager /></>}
         {tab === 'backup' && <BackupPanel />}
         {tab === 'remote-backup' && <RemoteBackupPanel />}
         {tab === 'updates' && <UpdatePanel />}
-        {tab === 'about' && <div className="about-panel"><SealMark size="large" /><h3>{branding.site_name} <span>v{data?.version || __APP_VERSION__}</span></h3><p>私有部署的 AnyRouter 凭证提取、账号检测与定时签到工作空间。</p><div className="about-features"><span><LockKeyhole size={17} />AES-256-GCM 字段加密</span><span><Network size={17} />HTTP / SOCKS5 / SSH 代理</span><span><Clock3 size={17} />普通与签到独立并发</span><span><Sparkles size={17} />失效凭证自动续签</span></div><div className="about-changelog"><h4>v{__APP_VERSION__} · 执行队列与三端布局</h4><p>独立队列页面支持暂停、删除任务、实时刷新及分别设置并发。签到默认依次执行，所有计划共享签到队列。</p><p>每次提取与签到在日志中记录直连或所用代理；Cookie 失效后自动重新提取并继续本次签到。</p></div></div>}
+        {tab === 'about' && <div className="about-panel"><SealMark size="large" /><h3>{branding.site_name} <span>v{data?.version || __APP_VERSION__}</span></h3><p>私有部署的 AnyRouter 凭证提取、账号检测与定时签到工作空间。</p><div className="about-features"><span><LockKeyhole size={17} />AES-256-GCM 字段加密</span><span><Network size={17} />HTTP / SOCKS5 / SSH 代理</span><span><Clock3 size={17} />全部任务全局串行</span><span><Sparkles size={17} />失效凭证自动续签</span></div><div className="about-changelog"><h4>v{__APP_VERSION__} · 执行队列与三端布局</h4><p>所有任务共享一个执行位，支持暂停、删除、实时刷新。签到计划、提取、检测和查询都会依次执行。</p><p>每次提取与签到在日志中记录直连或所用代理；Cookie 失效后自动重新提取并继续本次签到。</p></div></div>}
       </div>
     </div>
   </Modal>;
@@ -88,9 +89,8 @@ function RuntimeForm({ initial }: { initial: SettingsData }) {
   };
   return <form className="runtime-form" onSubmit={save}>
     <section className="settings-section"><h3>网络连接</h3>
-      <label className="field">运行模式<select value={settings.proxy_mode} onChange={event => { const value = event.target.value as 'pool' | 'direct'; if (value !== 'direct') { update('proxy_mode', value); return; } void confirm({ title: '启用直连模式？', message: '登录、检测和签到会直接使用服务器自己的网络出口，不经过任何代理。', confirmLabel: '使用直连' }).then(ok => { if (ok) update('proxy_mode', 'direct'); }); }}><option value="pool">代理池模式（不自动降级直连）</option><option value="direct">直连模式（需明确选择）</option></select></label>
       <div className="form-grid three"><NumberField label="连接超时（秒）" value={settings.connect_timeout} min={3} max={120} onChange={value => update('connect_timeout', value)} /><NumberField label="登录总时限（秒）" value={settings.login_timeout} min={15} max={300} onChange={value => update('login_timeout', value)} /><NumberField label="任务启动间隔（秒）" value={settings.account_gap} min={0} max={60} onChange={value => update('account_gap', value)} /></div>
-      <p className="form-hint">普通任务与签到的并发数量请在「执行队列」设置。代理全部不可用时暂停队列，不会自动改为直连。</p>
+      <p className="form-hint">所有任务全局逐个执行。网络线路请在「代理池」按操作指定；指定代理连续 5 次网络失败后，本次改用直连。</p>
       <label className="field">显示时区<select value={settings.timezone} onChange={event => update('timezone', event.target.value)}>{['Asia/Seoul', 'Asia/Shanghai', 'Asia/Tokyo', 'UTC', 'America/Los_Angeles'].map(zone => <option key={zone}>{zone}</option>)}</select></label>
     </section>
     <section className="settings-section"><h3><Sparkles size={15} /> 自动处理</h3>

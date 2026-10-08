@@ -2,7 +2,7 @@ from typing import Literal
 import unicodedata
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.passwords import ADMIN_PASSWORD_MIN, ADMIN_PASSWORD_MAX
 
 
@@ -127,11 +127,45 @@ class ProxyTrust(StrictModel):
     fingerprint: str = Field(min_length=10, max_length=200)
 
 
+class NetworkRoute(StrictModel):
+    mode: Literal['inherit', 'direct', 'proxy'] = 'direct'
+    proxy_id: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode='after')
+    def selected_proxy(self):
+        if self.mode == 'proxy' and not self.proxy_id:
+            raise ValueError('请选择一个代理节点')
+        if self.mode != 'proxy':
+            self.proxy_id = None
+        return self
+
+
+class OperationRoutes(StrictModel):
+    model_config = ConfigDict(extra='forbid', populate_by_name=True, serialize_by_alias=True)
+    extract: NetworkRoute = Field(default_factory=NetworkRoute)
+    refresh: NetworkRoute = Field(default_factory=NetworkRoute)
+    validation: NetworkRoute = Field(default_factory=NetworkRoute, alias='validate')
+    checkin: NetworkRoute = Field(default_factory=NetworkRoute)
+    tokens: NetworkRoute = Field(default_factory=NetworkRoute)
+    dashboard: NetworkRoute = Field(default_factory=NetworkRoute)
+
+    @model_validator(mode='after')
+    def no_inheritance(self):
+        if any(getattr(self, name).mode == 'inherit' for name in type(self).model_fields):
+            raise ValueError('操作默认线路必须选择直连或指定代理')
+        return self
+
+
+class AccountCheckinRoute(Selection):
+    network_route: NetworkRoute = Field(default_factory=lambda: NetworkRoute(mode='inherit'))
+
+
 class ScheduleInput(Selection):
     name: str = Field(min_length=1, max_length=100)
     interval_minutes: int = Field(default=1440, ge=5, le=525600)
     enabled: bool = True
     keep_accounts: bool = False
+    network_route: NetworkRoute = Field(default_factory=lambda: NetworkRoute(mode='inherit'))
 
 
 class BrandingSettings(StrictModel):
@@ -150,6 +184,12 @@ class BrandingSettings(StrictModel):
 class QueueSettings(StrictModel):
     max_concurrency: int = Field(default=1, ge=1, le=5)
     checkin_concurrency: int = Field(default=1, ge=1, le=5)
+
+    @model_validator(mode='after')
+    def global_serial(self):
+        # Read old settings safely, but never permit the old two-lane overlap.
+        self.max_concurrency = self.checkin_concurrency = 1
+        return self
 
 
 class HistorySelection(StrictModel):
@@ -171,7 +211,8 @@ class JobSelection(StrictModel):
 
 
 class RuntimeSettings(BrandingSettings, QueueSettings):
-    proxy_mode: Literal['pool', 'direct'] = 'pool'
+    proxy_mode: Literal['pool', 'direct'] = 'direct'
+    operation_routes: OperationRoutes = Field(default_factory=OperationRoutes)
     connect_timeout: int = Field(default=10, ge=3, le=120)
     login_timeout: int = Field(default=60, ge=15, le=300)
     account_gap: int = Field(default=2, ge=0, le=60)

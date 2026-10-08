@@ -64,7 +64,7 @@ class FakeService:
     async def validate(self, credentials, route, settings):
         return {'quota': 10.0}
 
-    async def checkin(self, credentials, route, settings, *, before_submit=None):
+    async def checkin(self, credentials, route, settings, *, before_submit=None, on_submit=None):
         self.checkins += 1
         if self.network_error:
             raise TaskError('network_error', '模拟网络失败')
