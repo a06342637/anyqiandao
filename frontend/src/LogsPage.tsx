@@ -9,7 +9,7 @@ import type { HistoryResult, LogEntry, PageData, Selection } from './types';
 
 const CATEGORIES = [
   { id: '', label: '全部' }, { id: 'checkin', label: '签到记录' }, { id: 'invalid', label: '凭证失效' }, { id: 'error', label: '错误' },
-  { id: 'extract', label: '提取' }, { id: 'validate', label: '检测' }, { id: 'proxy', label: '代理' }, { id: 'backup', label: '备份' }, { id: 'system', label: '系统' },
+  { id: 'extract', label: '提取' }, { id: 'validate', label: '检测' }, { id: 'balance', label: '余额' }, { id: 'proxy', label: '代理' }, { id: 'backup', label: '备份' }, { id: 'system', label: '系统' },
 ];
 
 export default function LogsPage({ timezone, jobId, accountId, onClearFilter }: { timezone: string; jobId: string; accountId: string; onClearFilter: () => void }) {

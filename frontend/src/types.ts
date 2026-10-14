@@ -52,7 +52,7 @@ export interface RuntimeSettings extends SiteBranding {
   max_concurrency: number; checkin_concurrency: number; stats_retention_days: number;
 }
 export interface NetworkRoute { mode: 'inherit' | 'direct' | 'proxy'; proxy_id?: string | null; }
-export type OperationRoutes = Record<'extract' | 'refresh' | 'validate' | 'checkin' | 'tokens' | 'dashboard', NetworkRoute>;
+export type OperationRoutes = Record<'extract' | 'refresh' | 'validate' | 'balance' | 'checkin' | 'tokens' | 'dashboard', NetworkRoute>;
 export interface SettingsData { settings: RuntimeSettings; version: string; script_revision: string; last_log_cleanup: number | null; next_log_cleanup: number | null; auto_schedule_id: string | null; }
 export interface CleanupResult { removed: number; logs: number; jobs: number; checkins: number; }
 export interface HistoryResult { removed: number; protected: number; }

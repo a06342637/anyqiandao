@@ -6,6 +6,7 @@ import type { Account, NetworkRoute, OperationRoutes, PageData, ProxyOption, Set
 
 export const OPERATIONS = [
   ['extract', '登录 / 提取 Cookie'], ['refresh', '更新 / 自动修复凭证'], ['validate', '检测凭证'],
+  ['balance', '检测余额'],
   ['checkin', '签到默认线路'], ['tokens', 'API 令牌查询'], ['dashboard', '数据看板'],
 ] as const;
 

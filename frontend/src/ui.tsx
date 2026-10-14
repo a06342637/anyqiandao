@@ -53,7 +53,7 @@ const labels: Record<string, string> = {
   healthy: '连通', unavailable: '不可用', needs_trust: '待确认指纹', host_key_required: '待确认指纹', browser_missing: '缺少浏览器',
   missing_session: '凭证不完整',
 };
-export const kindLabel = (kind: string) => ({ extract: '提取凭证', validate: '有效性检测', checkin: '签到', insights: '账号数据查询', proxy_test: '代理测试', script: '签到脚本', backup: '备份', system: '系统' }[kind] || kind);
+export const kindLabel = (kind: string) => ({ extract: '提取凭证', validate: '有效性检测', balance: '检测余额', checkin: '签到', insights: '账号数据查询', proxy_test: '代理测试', script: '签到脚本', backup: '备份', system: '系统' }[kind] || kind);
 export function Badge({ status, label }: { status: string; label?: string }) {
   const tone = ['valid', 'success', 'signed', 'already_signed', 'healthy'].includes(status) ? 'green' : ['invalid', 'invalid_credentials', 'error', 'unavailable', 'script_error', 'checkin_failed'].includes(status) ? 'red' : ['running'].includes(status) ? 'blue' : ['blocked', 'needs_manual', 'needs_trust', 'uncertain', 'network_error', 'proxy_error', 'host_key_required'].includes(status) ? 'amber' : 'gray';
   return <span className={`badge ${tone}`}><span className="badge-dot" />{label || labels[status] || status}</span>;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react';
-import { ArrowDownToLine, BarChart3, CheckCheck, Copy, FileText, Filter, GripVertical, KeyRound, Pencil, Play, Plus, RefreshCw, ShieldCheck, Trash2, Users } from 'lucide-react';
+import { ArrowDownToLine, BarChart3, CheckCheck, Coins, Copy, FileText, Filter, GripVertical, KeyRound, Pencil, Play, Plus, RefreshCw, ShieldCheck, Trash2, Users } from 'lucide-react';
 import { api, copyText, downloadBlob, fetchApi, formatTime, refreshData, useResource } from './api';
 import { Badge, Button, EmptyState, ErrorNotice, LoadingState, Modal, Pagination, RefreshButton, useConfirm, usePageClamp, usePageSize, useToast, useTrack } from './ui';
 import CredentialImport from './CredentialImport';
@@ -7,7 +7,7 @@ import AccountInsights, { type InsightView } from './AccountInsights';
 import { useSelection } from './selection';
 import type { Account, ActionResult, PageData } from './types';
 
-type AccountAction = 'validate' | 'checkin' | 'extract' | 'extract_invalid';
+type AccountAction = 'validate' | 'balance' | 'checkin' | 'extract' | 'extract_invalid';
 
 export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone: string; onExtract: () => void; onLogs: (accountId: string) => void }) {
   const toast = useToast();
@@ -38,7 +38,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
   const checkedPage = !!items.length && items.every(account => selection.selected(account.id));
   const canSort = !validity && !onlyExtracted && !busy;
   const run = async (operation: () => Promise<void>) => { setBusy(true); try { await operation(); refreshData(); } catch (caught) { toast((caught as Error).message, 'error'); } finally { setBusy(false); } };
-  const actionLabel = (kind: AccountAction) => ({ validate: repairInvalid ? '检测并修复' : '检测', checkin: '签到', extract: '重新提取', extract_invalid: '仅重提失效' })[kind];
+  const actionLabel = (kind: AccountAction) => ({ validate: repairInvalid ? '检测并修复' : '检测', balance: '检测余额', checkin: '签到', extract: '重新提取', extract_invalid: '仅重提失效' })[kind];
   const action = async (kind: AccountAction, account?: Account) => {
     const target = account ? `账号「${account.username}」` : `选中的 ${count} 个账号`;
     if (kind === 'checkin' && !await confirm({ title: `为${target}签到一次？`, message: '先验证凭证，再提交签到；有账密的账号可自动重新提取。Session 导入账号只签到，失效后保留并等待手动更新，不执行自动登录。', confirmLabel: '开始签到' })) return;
@@ -151,6 +151,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
       <div className="selection-summary"><label className="check-label account-mobile-select"><input type="checkbox" aria-label="选择本页账号（卡片）" checked={checkedPage} onChange={event => items.forEach(account => selection.toggle(account.id, event.target.checked))} />本页</label><span>已选 <strong>{count}</strong> 个{selection.all ? ' · 跨页全选' : ' · 跨页保留选择'}</span><button className="text-button" onClick={selection.selectAll}>全选当前筛选</button>{count > 0 && <button className="text-button" onClick={selection.clear}>清空选择</button>}</div>
       <label className="check-label repair-option" title="只对保存了登录密码的账号自动重提；Session 导入账号失效时等待人工更新。检测不会顺带签到。"><input type="checkbox" checked={repairInvalid} onChange={event => setRepairInvalid(event.target.checked)} />账密账号失效时自动重提</label>
       <div className="selection-actions">
+        <Button disabled={!count || busy} onClick={() => void action('balance')} title="批量读取所选账号的最新余额；使用代理池中的“检测余额”线路，不自动登录或签到"><Coins size={15} />检测余额</Button>
         <Button disabled={!count || busy} onClick={() => void action('validate')}><ShieldCheck size={15} />{repairInvalid ? '检测并修复' : '检测有效性'}</Button>
         <Button disabled={!count || busy} onClick={() => void action('extract_invalid')} title="只处理所选账号中已标记失效的 Cookie，其他账号保持不变"><RefreshCw size={15} />仅重提失效</Button>
         <Button disabled={!count || busy} onClick={() => void action('extract')} title="重新登录全部所选账号，包括凭证有效的账号">全部重提</Button>
@@ -171,7 +172,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
           </div></details>
         </td>
         <td data-label="凭证与时间" className="account-status-cell"><Badge status={account.validity} /><small className="account-message" title={account.message}>{account.message || '等待提取或检测'}</small><div className="account-time-list"><small>更新<span>{formatTime(account.last_extracted, timezone)}</span></small><small>检测<span>{formatTime(account.last_validated, timezone)}</span></small></div></td>
-        <td data-label="余额" className="account-balance"><div className="quota-line"><span className="quota-value">{account.quota !== null ? `$${account.quota.toFixed(4)}` : '待读取'}</span><button className="icon-button tiny" title="刷新余额（重新检测）" aria-label={`刷新 ${account.username} 的余额`} disabled={busy || !account.has_result} onClick={() => void action('validate', account)}><RefreshCw size={14} /></button></div><small className="date-cell" title="最近一次签到任务时间（北京时间）；具体结果请查看明细日志">上次签到 {formatTime(account.last_checkin, 'Asia/Shanghai')}</small></td>
+        <td data-label="余额" className="account-balance"><div className="quota-line"><span className="quota-value">{account.quota !== null ? `$${account.quota.toFixed(4)}` : '待读取'}</span><button className="icon-button tiny" title="检测余额（使用“检测余额”线路）" aria-label={`刷新 ${account.username} 的余额`} disabled={busy || !account.has_result} onClick={() => void action('balance', account)}><RefreshCw size={14} /></button></div><small className="date-cell" title="最近一次签到任务时间（北京时间）；具体结果请查看明细日志">上次签到 {formatTime(account.last_checkin, 'Asia/Shanghai')}</small></td>
         <td className="account-operations-cell"><div className="account-action-grid">
           <Button aria-label={`检测 ${account.username}`} disabled={busy || (!account.has_result && !(repairInvalid && account.has_password))} onClick={() => void action('validate', account)}><ShieldCheck size={13} />检测</Button>
           <Button aria-label={`签到 ${account.username}`} disabled={busy || (!account.has_result && !account.has_password)} onClick={() => void action('checkin', account)}><Play size={13} />签到</Button>

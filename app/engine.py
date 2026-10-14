@@ -202,7 +202,7 @@ class Engine:
                         login = self.store.account(job['account_id'])['login']
                         message = error.message if login.get('password') else 'Session 凭证已失效，请手动更新 session 与 api_user；不会自动登录'
                         self.store.execute("UPDATE accounts SET validity='invalid',message=?,last_validated=?,updated=? WHERE id=?", (message, now, now, job['account_id']))
-                elif job['kind'] in ('validate', 'checkin'):
+                elif job['kind'] in ('validate', 'balance', 'checkin'):
                     validity = {'invalid': 'invalid', 'needs_manual': 'blocked', 'network_error': 'network_error', 'proxy_error': 'network_error'}.get(error.code)
                     if validity:
                         self.store.execute('UPDATE accounts SET validity=?,message=?,last_validated=?,updated=? WHERE id=?',
@@ -349,6 +349,16 @@ class Engine:
                 (self.store.vault.seal(result, f'result:{account["id"]}'), now, now, result.get('quota'), proxy_id, now, account['id']),
                 'success', '凭证提取成功，已加入账号列表')
             self.after_extract(job, account)
+        elif job['kind'] == 'balance':
+            if not account['result']:
+                raise TaskError('invalid', '缺少登录凭证，请先提取或导入凭证后检测余额')
+            result, proxy_id = await self.routed(job, account, 'balance', settings, lambda active_route: self.service.validate(account['result'], active_route, settings))
+            if result.get('quota') is None:
+                raise TaskError('upstream_error', '网站未返回有效余额，已保留上次余额，请稍后重试')
+            now = time.time()
+            self.complete_account(job, "UPDATE accounts SET validity='valid',message='余额已更新',last_validated=?,quota=?,proxy_id=?,updated=? WHERE id=?",
+                (now, result['quota'], proxy_id, now, account['id']), 'success', '余额检测完成，已更新余额')
+            self.store.observe_account(account['id'], account['result']['api_user'], result['quota'], quota_of(result.get('profile') or {}, 'used_quota'), at=now)
         elif job['kind'] == 'validate':
             refreshed = False
             try:

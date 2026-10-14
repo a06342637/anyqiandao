@@ -86,7 +86,7 @@ class Selection(StrictModel):
 
 
 class ActionInput(Selection):
-    action: Literal['validate', 'extract', 'extract_invalid', 'checkin']
+    action: Literal['validate', 'balance', 'extract', 'extract_invalid', 'checkin']
     password: str | None = Field(default=None, min_length=1, max_length=4096)
     repair_invalid: bool | None = None
 
@@ -145,6 +145,7 @@ class OperationRoutes(StrictModel):
     extract: NetworkRoute = Field(default_factory=NetworkRoute)
     refresh: NetworkRoute = Field(default_factory=NetworkRoute)
     validation: NetworkRoute = Field(default_factory=NetworkRoute, alias='validate')
+    balance: NetworkRoute = Field(default_factory=NetworkRoute)
     checkin: NetworkRoute = Field(default_factory=NetworkRoute)
     tokens: NetworkRoute = Field(default_factory=NetworkRoute)
     dashboard: NetworkRoute = Field(default_factory=NetworkRoute)

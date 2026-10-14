@@ -126,7 +126,7 @@ def account_router(store, auth, engine):
                     job_id, inserted = store.enqueue('extract', account_id,
                         payload={'password': password, 'only_if_invalid': payload.action == 'extract_invalid', 'route_operation': 'refresh' if row['result_enc'] else 'extract'}, connection=connection)
                 else:
-                    if payload.action == 'validate' and not row['result_enc'] and not repair_invalid:
+                    if not row['result_enc'] and (payload.action == 'balance' or payload.action == 'validate' and not repair_invalid):
                         skipped += 1
                         continue
                     options = {'repair_invalid': repair_invalid} if payload.action == 'validate' else None

@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from app.schemas import NetworkRoute
 
 OPERATION_LABELS = {'extract': '登录 / 提取 Cookie', 'refresh': '更新凭证', 'validate': '检测凭证',
-                    'checkin': '签到', 'tokens': 'API 令牌', 'dashboard': '数据看板'}
+                    'balance': '检测余额', 'checkin': '签到', 'tokens': 'API 令牌', 'dashboard': '数据看板'}
 
 
 def validate_route(store, route, connection=None):
