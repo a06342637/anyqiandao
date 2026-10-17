@@ -237,6 +237,8 @@ class Engine:
         if selected.mode == 'direct':
             job['_route_label'] = f'{label} · 直连'
             self.log_job(job, '使用服务器网络出口执行')
+            if operation == 'checkin' and settings.checkin_fallback_proxy_ids:
+                return await self.direct_checkin_with_fallback(job, settings, invoke)
             return await invoke(None), None
         proxy = self.store.one('SELECT * FROM proxies WHERE id=? AND enabled=1', (selected.proxy_id,))
         if not proxy:
@@ -267,6 +269,55 @@ class Engine:
         job['_route_label'] = f'{label} · 直连替补'
         self.log_job(job, '指定代理 5 次网络尝试均失败，使用直连完成本次操作', level='warning')
         return await invoke(None), None
+
+    async def direct_checkin_with_fallback(self, job, settings, invoke):
+        nodes = {row['id']: row for row in self.store.all('SELECT * FROM proxies WHERE enabled=1')}
+        candidates = [nodes[identifier] for identifier in settings.checkin_fallback_proxy_ids if identifier in nodes]
+        if not candidates:
+            self.log_job(job, '没有可用的已勾选备用代理，继续按直连最多三次核验')
+            return await invoke(None), None
+        previous = self.store.meta('checkin_fallback_last_id')
+        index = next((i + 1 for i, node in enumerate(candidates) if node['id'] == previous), 0) % len(candidates)
+        proxy = candidates[index]
+        direct = None
+        job['_checkin_attempt_limit'], job['_checkin_attempt_offset'] = 2, 0
+        for connection_attempt in range(2):
+            try:
+                direct = await invoke(None)
+                break
+            except (TaskError, httpx.TransportError, OSError) as error:
+                if job.get('_checkin_submitted') or isinstance(error, TaskError) and not error.retry_proxy:
+                    raise
+                self.log_job(job, f'直连第 {connection_attempt + 1}/2 次网络连接失败', level='warning')
+                job['_checkin_attempt_limit'], job['_checkin_attempt_offset'] = 1, 1
+        if direct is not None and not direct.get('can_fallback'):
+            return direct, None
+        for line in (direct or {}).get('logs', [])[:40]:
+            self.log_job(job, line, kind='script')
+        job['_checkin_continuation'] = direct
+        job['_checkin_attempt_limit'], job['_checkin_attempt_offset'] = 1, 2
+        job['_route_label'] = f'签到 · 备用代理：{proxy["name"]}（{proxy["id"][:8]}）'
+        self.log_job(job, '直连两次未完成签到，选择已勾选备用代理；先复核余额，最多再签到一次')
+        self.store.set_meta('checkin_fallback_last_id', proxy['id'])
+        try:
+            config = await self.proxy_config(proxy, settings)
+            async with ProxyBridge(config, settings.connect_timeout, proxy['trusted_key']) as route:
+                result = await invoke(route)
+        except HostKeyRequired as error:
+            self.require_host_key(proxy, error)
+            raise
+        except TaskError as error:
+            if direct is None:
+                raise
+            self.log_job(job, error.message, level='warning')
+            result = {**direct, 'code': 'uncertain', 'reward_amount': None,
+                      'message': '直连未到账，备用代理未完成核验；保留待确认', 'logs': []}
+        except (httpx.TransportError, OSError):
+            if direct is None:
+                raise
+            result = {**direct, 'code': 'uncertain', 'reward_amount': None,
+                      'message': '备用代理连接失败；保留待确认', 'logs': []}
+        return result, proxy['id']
 
     def after_extract(self, job, account):
         settings = self.store.settings()
@@ -411,7 +462,8 @@ class Engine:
 
     async def checkin_or_observed(self, job, account, route, settings):
         state = self.store.daily_state(self.store.account(account['id']))
-        if confirmed_today(state, account['result']['api_user'], time.time()) or submitted_today(state, account['result']['api_user'], time.time()):
+        continuation = job.get('_checkin_continuation')
+        if not continuation and (confirmed_today(state, account['result']['api_user'], time.time()) or submitted_today(state, account['result']['api_user'], time.time())):
             result = await self.service.validate(account['result'], route, settings)
             observed = self.checkin_precheck(account, result.get('quota'), quota_of(result.get('profile') or {}, 'used_quota'), time.time())
             if observed:
@@ -423,9 +475,25 @@ class Engine:
                 self.store.clear_rejected_submission(account['id'], state.submitted_at)
                 self.log_job(job, '管理员主动重新核验待确认账号；先查询余额，本轮最多尝试签到三次')
         job['_checkin_started'] = True
+        def precheck(profile, observed_at):
+            if continuation:
+                gain = balance_credit({'quota': continuation.get('quota_before'), 'used_quota': continuation.get('used_before')},
+                                      {'quota': quota_of(profile), 'used_quota': quota_of(profile, 'used_quota')})
+                same_day = beijing_day(continuation['observed_before']) == beijing_day(observed_at)
+                if fixed_reward(gain) and same_day:
+                    return {**continuation, 'code': 'signed', 'message': '备用代理复核到直连后的延迟到账，已确认新增 $25；未再次提交',
+                            'quota': quota_of(profile), 'quota_after': quota_of(profile), 'used_after': quota_of(profile, 'used_quota'),
+                            'observed_after': observed_at, 'verified_gain': gain, 'reward_amount': 25, 'logs': []}
+                if gain != 0 or not same_day:
+                    return {**continuation, 'code': 'uncertain', 'message': '切换代理后余额变化或日期无法确认，未再次提交签到',
+                            'quota': quota_of(profile), 'quota_after': quota_of(profile), 'used_after': quota_of(profile, 'used_quota'),
+                            'observed_after': observed_at, 'logs': []}
+            return self.checkin_precheck(account, quota_of(profile), quota_of(profile, 'used_quota'), observed_at)
+        options = ({'attempt_limit': job['_checkin_attempt_limit'], 'attempt_offset': job['_checkin_attempt_offset']}
+                   if '_checkin_attempt_limit' in job else {})
         return await self.service.checkin(account['result'], route, settings,
-                    before_submit=lambda profile, observed_at: self.checkin_precheck(account, quota_of(profile), quota_of(profile, 'used_quota'), observed_at),
-                    on_submit=lambda: self.mark_submitted(job, account))
+                    before_submit=precheck,
+                    on_submit=lambda: None if job.get('_checkin_submitted') else self.mark_submitted(job, account), **options)
 
     def mark_submitted(self, job, account):
         at = self.store.mark_submission(account['id'], account['result']['api_user'])

@@ -220,6 +220,7 @@ class JobSelection(StrictModel):
 class RuntimeSettings(BrandingSettings, QueueSettings):
     proxy_mode: Literal['pool', 'direct'] = 'direct'
     operation_routes: OperationRoutes = Field(default_factory=OperationRoutes)
+    checkin_fallback_proxy_ids: list[str] = Field(default_factory=list, max_length=1000)
     connect_timeout: int = Field(default=10, ge=3, le=120)
     login_timeout: int = Field(default=60, ge=15, le=300)
     account_gap: int = Field(default=2, ge=0, le=60)

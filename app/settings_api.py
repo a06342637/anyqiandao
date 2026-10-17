@@ -24,7 +24,7 @@ def settings_router(store, auth):
 
     @router.put('/settings')
     def update_settings(payload: RuntimeSettings):
-        changes = payload.model_dump(include=payload.model_fields_set, exclude={'max_concurrency', 'checkin_concurrency', 'auto_checkin_interval_minutes', 'site_name', 'site_icon_text', 'operation_routes', 'proxy_mode'})
+        changes = payload.model_dump(include=payload.model_fields_set, exclude={'max_concurrency', 'checkin_concurrency', 'auto_checkin_interval_minutes', 'site_name', 'site_icon_text', 'operation_routes', 'proxy_mode', 'checkin_fallback_proxy_ids'})
         with store.transaction() as connection:
             current = connection.execute("SELECT value FROM meta WHERE key='settings'").fetchone()
             previous = RuntimeSettings.model_validate_json(current['value'])
@@ -142,8 +142,8 @@ def settings_router(store, auth):
             routes = list(settings.operation_routes.model_dump().values())
             for table, column in (('accounts', 'checkin_route'), ('schedules', 'network_route')):
                 routes.extend(json.loads(row[0]) for row in connection.execute(f'SELECT {column} FROM {table}'))
-            if any(route.get('mode') == 'proxy' and route.get('proxy_id') == proxy_id for route in routes):
-                raise HTTPException(409, '此代理仍被操作默认线路、账号或签到计划引用；请先改为其他节点或直连，再删除，避免备份无法恢复')
+            if proxy_id in settings.checkin_fallback_proxy_ids or any(route.get('mode') == 'proxy' and route.get('proxy_id') == proxy_id for route in routes):
+                raise HTTPException(409, '此代理仍被默认线路、签到备用、账号或计划引用；请先取消选择或改为其他节点，再删除')
             connection.execute('DELETE FROM proxies WHERE id=?', (proxy_id,))
         return {'ok': True}
 
@@ -157,6 +157,22 @@ def settings_router(store, auth):
             connection.execute("UPDATE meta SET value=? WHERE key='settings'", (updated.model_dump_json(),))
         store.log('system', '操作线路已保存；仅显式指定的操作使用所选代理，当前执行任务保持原线路')
         return payload.model_dump()
+
+    @router.put('/settings/checkin-fallback')
+    def checkin_fallback(payload: Selection):
+        identifiers = list(dict.fromkeys(payload.ids))
+        if payload.all_matching or payload.exclude_ids or len(identifiers) > 1000:
+            raise HTTPException(400, '请明确勾选签到备用代理，最多 1000 个')
+        with store.transaction() as connection:
+            for identifier in identifiers:
+                row = connection.execute('SELECT enabled FROM proxies WHERE id=?', (identifier,)).fetchone()
+                if not row or not row['enabled']:
+                    raise HTTPException(400, '勾选的备用代理不存在或已停用，请重新选择')
+            previous = RuntimeSettings.model_validate_json(connection.execute("SELECT value FROM meta WHERE key='settings'").fetchone()['value'])
+            updated = previous.model_copy(update={'checkin_fallback_proxy_ids': identifiers})
+            connection.execute("UPDATE meta SET value=? WHERE key='settings'", (updated.model_dump_json(),))
+        store.log('system', f'签到备用代理已保存：{len(identifiers)} 个；直连两次未到账后选用一个节点做第三次尝试')
+        return {'ids': identifiers}
 
     @router.put('/accounts/routes/checkin')
     def account_checkin_route(payload: AccountCheckinRoute):

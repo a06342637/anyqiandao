@@ -33,9 +33,34 @@ export function OperationRouting() {
     catch (error) { toast((error as Error).message, 'error'); } finally { setBusy(false); }
   };
   const values = draft || data?.settings.operation_routes;
-  return <section className="settings-section"><h3><Network size={16} /> 按操作选择线路</h3><p className="form-hint">添加代理不会自动使用。每个操作默认直连，只有明确选择节点才走代理。网络失败尝试该节点最多 5 次，再转直连；验证码、凭证错误或已提交但结果不明的签到不会反复重发。</p><ErrorNotice message={error || nodes.error} retry={reload} />
+  return <><section className="settings-section"><h3><Network size={16} /> 按操作选择线路</h3><p className="form-hint">添加代理不会自动使用。每个操作默认直连，只有明确选择节点才走代理。网络失败尝试该节点最多 5 次，再转直连；验证码、凭证错误或已提交但结果不明的签到不会反复重发。</p><ErrorNotice message={error || nodes.error} retry={reload} />
     {values && <form onSubmit={save}><div className="form-grid">{OPERATIONS.map(([key, label]) => <label className="field" key={key}>{label}<RouteSelect value={values[key]} proxies={nodes.data?.items || []} disabled={busy} label={label} onChange={route => setDraft({ ...values, [key]: route })} /></label>)}</div>
       <p className="form-hint">登录与 Cookie 提取属于同一浏览器会话；手动粘贴 Session / api_user 只保存数据，不访问外网。签到计划与账号还可在“签到管理”指定线路。</p><Button type="submit" variant="primary" busy={busy} disabled={!draft || busy}><Save size={15} />保存操作线路</Button></form>}
+  </section><CheckinFallbackRouting /></>;
+}
+
+function CheckinFallbackRouting() {
+  const settings = useResource<SettingsData>('/settings', 0);
+  const nodes = useResource<{ items: ProxyOption[] }>('/proxies/options', 0);
+  const [draft, setDraft] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const selected = draft ?? settings.data?.settings.checkin_fallback_proxy_ids ?? [];
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api('/settings/checkin-fallback', 'PUT', { ids: selected });
+      setDraft(null); refreshData(); toast('签到备用代理已保存', 'success');
+    } catch (error) { toast((error as Error).message, 'error'); }
+    finally { setBusy(false); }
+  };
+  return <section className="settings-section"><h3><Network size={16} /> 签到备用代理</h3>
+    <p className="form-hint">签到使用直连时，前两次未到账或连接失败，第三次改用勾选的备用代理。切换后先查余额，已到账就停止；总共最多三次。勾选多个时轮流选用一个，未勾选则保持直连。</p>
+    <ErrorNotice message={settings.error || nodes.error} retry={settings.reload} />
+    <div className="form-grid">{nodes.data?.items.map(proxy => <label className="check-label" key={proxy.id}><input type="checkbox" aria-label={`签到备用 ${proxy.name}`} checked={selected.includes(proxy.id)} disabled={busy || !proxy.enabled && !selected.includes(proxy.id)} onChange={event => setDraft(event.target.checked ? [...selected, proxy.id] : selected.filter(id => id !== proxy.id))} />{proxy.name} · {proxy.scheme}{!proxy.enabled ? '（已停用）' : ''}</label>)}</div>
+    {nodes.data && !nodes.data.items.length && <p className="form-hint">尚无代理，添加并启用节点后可在这里勾选。</p>}
+    <p className="form-hint">只影响签到的直连线路；账号或计划已指定代理时继续使用其设置。请求结果不明时停止提交并保留待确认。</p>
+    <Button variant="primary" disabled={draft === null || busy} busy={busy} onClick={() => void save()}><Save size={15} />保存签到备用</Button>
   </section>;
 }
 

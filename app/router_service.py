@@ -309,7 +309,9 @@ class RouterService:
         async with self.signed_in(credentials, route, settings) as session:
             return await read_console(session, credentials, settings, options)
 
-    async def checkin(self, credentials, route, settings, *, before_submit=None, on_submit=None):
+    async def checkin(self, credentials, route, settings, *, before_submit=None, on_submit=None, attempt_limit=3, attempt_offset=0):
+        if not 1 <= attempt_limit <= 3 or not 0 <= attempt_offset <= 2 or attempt_limit + attempt_offset > 3:
+            raise ValueError('签到最多尝试三次')
         async with self.signed_in(credentials, route, settings) as session:
             async def read_profile():
                 status, text = await session.api('/api/user/self', headers=api_headers(credentials))
@@ -338,7 +340,7 @@ class RouterService:
             def zero_credit():
                 return gain == 0 and quota_of(before, 'used_quota') is not None and quota_of(after, 'used_quota') is not None
 
-            for attempt in range(1, 4):
+            for attempt in range(1, attempt_limit + 1):
                 if attempt > 1:
                     await asyncio.sleep(1)
                     try:
@@ -358,7 +360,7 @@ class RouterService:
                         message = '再次签到前余额或消耗无法确认净新增为零，停止重试'
                         break
                 baseline = after if attempt > 1 else before
-                logs.append(f'第 {attempt}/3 次签到前余额 {currency}{quota_of(baseline):.4f}')
+                logs.append(f'第 {attempt + attempt_offset}/3 次签到前余额 {currency}{quota_of(baseline):.4f}')
                 client.response = None
                 try:
                     async with asyncio.timeout(75):
@@ -384,7 +386,7 @@ class RouterService:
                     if value:
                         receipt_message = receipt_message.replace(value, '[已隐藏]')
                 receipt_message = ''.join(character for character in receipt_message if character.isprintable())[:300]
-                logs.append(f'第 {attempt}/3 次网站签到接口返回 HTTP {client.response.status_code}；success={receipt.get("success")}；message={receipt_message or "（空）"}')
+                logs.append(f'第 {attempt + attempt_offset}/3 次网站签到接口返回 HTTP {client.response.status_code}；success={receipt.get("success")}；message={receipt_message or "（空）"}')
                 after_read_ok = False
                 for reading in range(3):
                     after_read_ok = False
@@ -410,15 +412,15 @@ class RouterService:
                     break
                 code, message = 'uncertain', '未确认固定 $25 到账，请人工核对后点击确认'
                 if after_read_ok and quota_of(after) is not None:
-                    logs.append(f'第 {attempt}/3 次签到后余额 {currency}{quota_of(after):.4f}；本轮累计核验新增 {gain if gain is not None else "未知"}')
+                    logs.append(f'第 {attempt + attempt_offset}/3 次签到后余额 {currency}{quota_of(after):.4f}；本轮累计核验新增 {gain if gain is not None else "未知"}')
                 if not after_read_ok or not zero_credit():
                     logs.append('余额或消耗读数不完整、发生其他金额变化或请求结果不明，停止继续签到')
                     break
-                if attempt < 3:
+                if attempt < attempt_limit:
                     logs.append('已核对本次未到账，将重新查余额后再次签到')
             quota_before, quota_after = quota_of(before), quota_of(after)
             used_before, used_after = quota_of(before, 'used_quota'), quota_of(after, 'used_quota')
-            logs.append(f'本轮共提交 {submissions} 次签到请求（最多 3 次）')
+            logs.append(f'本段共提交 {submissions} 次签到请求（本轮最多 3 次）')
             logs.append(message)
             if quota_after is not None:
                 logs.append(f'签到前 {currency}{quota_before:.4f} → 签到后 {currency}{quota_after:.4f}，余额变化 {quota_after - quota_before:+.4f}')
@@ -427,6 +429,7 @@ class RouterService:
             return {'code': code, 'message': message, 'quota': quota_after if quota_after is not None else quota_before,
                     'quota_before': quota_before, 'quota_after': quota_after, 'used_before': used_before, 'used_after': used_after,
                     'logs': logs, 'receipt_code': receipt_code, 'verified_gain': gain, 'attempts': submissions,
+                    'can_fallback': code == 'uncertain' and receipt_code == 'accepted' and after_read_ok and zero_credit() and same_day(),
                     'reward_amount': 25.0 if code == 'signed' else None,
                     'observed_before': observed_before, 'observed_after': observed_after, 'claimed_at': claimed_at}
 

@@ -50,6 +50,7 @@ export type ProxyOption = Pick<ProxyNode, 'id' | 'name' | 'enabled' | 'scheme'>;
 export interface SiteBranding { site_name: string; site_icon_text: string; }
 export interface RuntimeSettings extends SiteBranding {
   operation_routes: OperationRoutes;
+  checkin_fallback_proxy_ids: string[];
   proxy_mode: 'pool' | 'direct'; connect_timeout: number; login_timeout: number; account_gap: number;
   log_retention_days: number; queue_retention_days: number; log_cleanup_hours: number; log_cleanup_enabled: boolean; timezone: string;
   auto_checkin: boolean; auto_checkin_interval_minutes: number; auto_reextract: boolean;

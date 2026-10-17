@@ -226,6 +226,9 @@ def backup_router(store, auth):
                 connection.execute('UPDATE schedules SET network_route=? WHERE id=?', (json.dumps(mapped_route(route)), schedule_id))
             if 'operation_routes' in restored_settings:
                 restored_settings['operation_routes'] = {name: mapped_route(route) for name, route in restored_settings['operation_routes'].items()}
+            if 'checkin_fallback_proxy_ids' in restored_settings:
+                restored_settings['checkin_fallback_proxy_ids'] = [mapped_route({'mode': 'proxy', 'proxy_id': identifier})['proxy_id']
+                                                                 for identifier in restored_settings['checkin_fallback_proxy_ids']]
             existing_checkins = {(row['account_id'], round(row['created'], 3)) for row in connection.execute('SELECT account_id,created FROM checkins').fetchall()}
             for item in document.get('checkins') or []:
                 if not isinstance(item, dict) or item.get('username') not in ids_by_name or not item.get('created'):
