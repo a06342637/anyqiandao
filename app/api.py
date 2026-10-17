@@ -4,13 +4,15 @@ import json
 import secrets
 import time
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.config import VERSION
 from app.db import SCHEMA_VERSION
-from app.schemas import AccountEdit, ActionInput, ImportInput, QueueSettings, Reorder, RuntimeSettings, Selection
+from app.checkin_state import BEIJING, beijing_day
+from app.schemas import AccountEdit, ActionInput, CheckinConfirmationInput, ImportInput, QueueSettings, Reorder, RuntimeSettings, Selection
 from app.statistics import checkin_statistics
 
 
@@ -50,9 +52,9 @@ def account_router(store, auth, engine):
 
     @router.get('/accounts')
     def accounts(page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=100),
-                 validity: str | None = None, only_extracted: bool = False):
+                 validity: str | None = None, only_extracted: bool = False, needs_confirmation: bool = False):
         try:
-            selection = Selection(all_matching=True, validity=validity or None, only_extracted=only_extracted)
+            selection = Selection(all_matching=True, validity=validity or None, only_extracted=only_extracted, needs_confirmation=needs_confirmation)
         except ValueError:
             raise HTTPException(400, '账号状态筛选无效') from None
         where, values = store.selection_where(selection)
@@ -60,6 +62,35 @@ def account_router(store, auth, engine):
         rows = store.all('SELECT * FROM accounts WHERE ' + where + ' ORDER BY position,created,rowid LIMIT ? OFFSET ?',
                          [*values, limit, (page - 1) * limit])
         return {'items': [store.public_account(row) for row in rows], 'total': count, 'page': page, 'limit': limit}
+
+    @router.post('/accounts/{account_id}/checkin/confirm')
+    def confirm_checkin(account_id: str, payload: CheckinConfirmationInput):
+        now = time.time()
+        if payload.day != beijing_day(now):
+            raise HTTPException(409, '北京时间日期已改变，请刷新后确认')
+        with store.transaction() as connection:
+            row = connection.execute('SELECT * FROM accounts WHERE id=?', (account_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, '账号不存在')
+            if connection.execute("SELECT 1 FROM jobs WHERE account_id=? AND status IN ('pending','running') LIMIT 1", (account_id,)).fetchone():
+                raise HTTPException(409, '账号仍有任务等待或执行，请完成后再确认')
+            view = store.daily_view(row, at=now)
+            if view['today_checkin'] == 'confirmed':
+                return {'ok': True, 'resolved': 0}
+            if view['today_checkin'] != 'uncertain' or not row['result_enc']:
+                raise HTTPException(409, '该账号今天没有待确认签到')
+            credentials = store.vault.open(row['result_enc'], f'result:{account_id}')
+            state = store.daily_state(row)
+            store.observe_account(account_id, credentials['api_user'], state.quota if state else None,
+                                  state.used_quota if state else None, at=now, confirm=True, evidence='manual', connection=connection)
+            start = datetime.fromtimestamp(now, BEIJING).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            resolved = connection.execute("UPDATE checkins SET code='manual_confirmed',reward_amount=NULL WHERE account_id=? AND code='uncertain' AND created>=? AND created<=?",
+                                          (account_id, start, now)).rowcount
+            connection.execute("UPDATE jobs SET status='manual_confirmed',message='管理员已确认处理；未增加签到奖励' WHERE account_id=? AND kind='checkin' AND status='uncertain' AND finished>=? AND finished<=?",
+                               (account_id, start, now))
+            connection.execute("UPDATE accounts SET checkin_status='manual_confirmed',message='今日待确认已由管理员确认处理；未增加签到奖励',updated=? WHERE id=?", (now, account_id))
+        store.log('checkin', '管理员已确认处理今日待确认签到；保留原始余额和执行日志，不新增签到奖励', account_id=account_id)
+        return {'ok': True, 'resolved': resolved}
 
     @router.post('/accounts/import')
     def import_accounts(payload: ImportInput):
@@ -101,6 +132,8 @@ def account_router(store, auth, engine):
         repair_invalid = payload.repair_invalid if payload.repair_invalid is not None else store.settings().auto_reextract
         if payload.repair_invalid is not None and payload.action != 'validate':
             raise HTTPException(400, '自动重提选项只能用于凭证检测')
+        if payload.retry_unconfirmed and payload.action != 'checkin':
+            raise HTTPException(400, '重新核验选项只能用于签到')
         with store.transaction() as connection:
             count = store.selection_count(payload, connection=connection)
             if not count:
@@ -130,6 +163,8 @@ def account_router(store, auth, engine):
                         skipped += 1
                         continue
                     options = {'repair_invalid': repair_invalid} if payload.action == 'validate' else None
+                    if payload.action == 'checkin':
+                        options = {'retry_unconfirmed': payload.retry_unconfirmed}
                     job_id, inserted = store.enqueue(payload.action, account_id, payload=options, connection=connection)
                 queued += int(inserted)
                 skipped += int(not inserted)

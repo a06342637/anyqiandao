@@ -22,7 +22,7 @@ class DailyCheckinState(BaseModel):
     confirmed_at: float | None = Field(default=None, ge=0, le=253402300799)
     last_signed_at: float | None = Field(default=None, ge=0, le=253402300799)
     submitted_at: float | None = Field(default=None, ge=0, le=253402300799)
-    evidence: Literal['', 'balance_25', 'receipt', 'history'] = ''
+    evidence: Literal['', 'balance_25', 'receipt', 'history', 'manual'] = ''
 
 
 def beijing_day(timestamp):

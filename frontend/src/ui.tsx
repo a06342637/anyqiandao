@@ -47,7 +47,7 @@ export function Button({ children, variant = 'secondary', busy, className = '', 
 }
 const labels: Record<string, string> = {
   valid: '有效', invalid: '已失效', unknown: '未检测', blocked: '需人工处理', pending: '等待中', running: '执行中',
-  success: '已完成', signed: '签到成功', already_signed: '已签到', needs_manual: '需人工处理', cancelled: '已取消',
+  manual_confirmed: '人工确认', success: '已完成', signed: '签到成功', already_signed: '已签到', needs_manual: '需人工处理', cancelled: '已取消',
   network_error: '网络异常', proxy_error: '代理异常', login_error: '登录未完成', invalid_credentials: '账密有误', password_required: '需输入密码',
   script_error: '脚本异常', checkin_failed: '签到失败', uncertain: '结果待确认', upstream_error: '网站异常', error: '执行异常',
   healthy: '连通', unavailable: '不可用', needs_trust: '待确认指纹', host_key_required: '待确认指纹', browser_missing: '缺少浏览器',
@@ -55,7 +55,7 @@ const labels: Record<string, string> = {
 };
 export const kindLabel = (kind: string) => ({ extract: '提取凭证', validate: '有效性检测', balance: '检测余额', checkin: '签到', insights: '账号数据查询', proxy_test: '代理测试', script: '签到脚本', backup: '备份', system: '系统' }[kind] || kind);
 export function Badge({ status, label }: { status: string; label?: string }) {
-  const tone = ['valid', 'success', 'signed', 'already_signed', 'healthy'].includes(status) ? 'green' : ['invalid', 'invalid_credentials', 'error', 'unavailable', 'script_error', 'checkin_failed'].includes(status) ? 'red' : ['running'].includes(status) ? 'blue' : ['blocked', 'needs_manual', 'needs_trust', 'uncertain', 'network_error', 'proxy_error', 'host_key_required'].includes(status) ? 'amber' : 'gray';
+  const tone = ['valid', 'success', 'signed', 'already_signed', 'manual_confirmed', 'healthy'].includes(status) ? 'green' : ['invalid', 'invalid_credentials', 'error', 'unavailable', 'script_error', 'checkin_failed'].includes(status) ? 'red' : ['running'].includes(status) ? 'blue' : ['blocked', 'needs_manual', 'needs_trust', 'uncertain', 'network_error', 'proxy_error', 'host_key_required'].includes(status) ? 'amber' : 'gray';
   return <span className={`badge ${tone}`}><span className="badge-dot" />{label || labels[status] || status}</span>;
 }
 export function EmptyState({ title, description, action }: { title: string; description: string; action?: ReactNode }) {

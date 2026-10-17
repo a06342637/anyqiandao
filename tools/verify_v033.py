@@ -252,7 +252,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReceiptTests(unittest.IsolatedAsyncioTestCase):
-    async def run_checkin(self, receipt, before, after):
+    async def run_checkin(self, receipt, before, after, expected_posts=1):
         self.requests = []
         self.after_index = 0
         self.profiles = 0
@@ -279,7 +279,7 @@ class ReceiptTests(unittest.IsolatedAsyncioTestCase):
         service.signed_in = signed_in
         with patch('app.router_service.asyncio.sleep', new=AsyncMock()):
             result = await service.checkin({'session': 'fixture-secret-session', 'api_user': '42'}, None, RuntimeSettings())
-        self.assertEqual(self.requests.count((CHECKIN_PATH, 'POST')), 1)
+        self.assertEqual(self.requests.count((CHECKIN_PATH, 'POST')), expected_posts)
         self.assertNotIn('fixture-secret-session', json.dumps(result))
         return result
 

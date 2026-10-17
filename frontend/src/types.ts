@@ -5,6 +5,7 @@ export interface CheckinBalance {
 }
 export interface DailyCheckin {
   checkin_day: string; today_checkin: 'confirmed' | 'uncertain' | 'unconfirmed'; last_signed_at: number | null;
+  manual_confirmation: boolean;
 }
 export interface Account extends DailyCheckin {
   checkin_route: NetworkRoute;
@@ -13,7 +14,7 @@ export interface Account extends DailyCheckin {
   last_validated: number | null; last_extracted: number | null; last_checkin: number | null;
   checkin_status: string | null; quota: number | null; created: number; updated: number; note: string; position: number; last_balance: CheckinBalance | null;
 }
-export interface Selection { ids?: string[]; all_matching?: boolean; validity?: string; exclude_ids?: string[]; only_extracted?: boolean; }
+export interface Selection { ids?: string[]; all_matching?: boolean; validity?: string; exclude_ids?: string[]; only_extracted?: boolean; needs_confirmation?: boolean; }
 export interface PageData<Item> { items: Item[]; total: number; page: number; limit: number; }
 export interface Job {
   id: string; account_id: string | null; proxy_id: string | null; kind: string; status: string; source: string;
@@ -67,8 +68,10 @@ export interface ActionResult { queued: number; skipped?: number; filtered_count
 export interface StatsAccount extends DailyCheckin {
   account_id: string; username: string; note: string; quota: number | null; validity: string; signed: number; already: number; failed: number; uncertain: number;
   earned: number; last: number | null; last_code: string | null; last_balance: CheckinBalance | null;
+  manual: number;
 }
 export interface Stats {
+  manual: number;
   range: 'day' | 'week' | 'month'; since: number; until: number; timezone: string; attempts: number; signed: number; already: number; failed: number; uncertain: number; earned: number;
   balance_total: number; balance_accounts: number; accounts_total: number; legacy_records: number; unmeasured: number;
   series: { day: string; signed: number; already: number; failed: number; uncertain: number; earned: number }[]; accounts: StatsAccount[]; stats_retention_days: number;

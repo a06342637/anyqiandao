@@ -270,9 +270,9 @@ class PageClient:
         address = urlsplit(url)
         if address.scheme != 'https' or address.hostname != urlsplit(TARGET_ORIGIN).hostname or address.path != '/api/user/sign_in':
             raise TaskError('script_error', '脚本目标地址不在允许范围内')
-        self.sent = True
-        if self.on_submit:
+        if not self.sent and self.on_submit:
             self.on_submit()
+        self.sent = True
         future = asyncio.run_coroutine_threadsafe(
             self.session.api(address.path, method='POST', headers=dict(headers), timeout=int(timeout * 1000)), self.loop)
         status, text = future.result(timeout + 15)
@@ -311,8 +311,11 @@ class RouterService:
 
     async def checkin(self, credentials, route, settings, *, before_submit=None, on_submit=None):
         async with self.signed_in(credentials, route, settings) as session:
-            status, text = await session.api('/api/user/self', headers=api_headers(credentials))
-            before = profile_result(status, text, credentials['api_user'])
+            async def read_profile():
+                status, text = await session.api('/api/user/self', headers=api_headers(credentials))
+                return profile_result(status, text, credentials['api_user'])
+
+            before = await read_profile()
             observed_before = time.time()
             if quota_of(before) is None:
                 raise TaskError('upstream_error', '未读取到有效的签到前余额，本次未提交签到，请稍后重试')
@@ -321,75 +324,109 @@ class RouterService:
                 if observed:
                     return observed
             client = PageClient(session, asyncio.get_running_loop(), on_submit)
-            provider = SimpleNamespace(domain=TARGET_ORIGIN, sign_in_path='/api/user/sign_in')
+            provider = SimpleNamespace(domain=TARGET_ORIGIN, sign_in_path=CHECKIN_PATH)
             headers = api_headers(credentials) | {'Origin': TARGET_ORIGIN, 'Referer': TARGET_ORIGIN + '/console'}
             claimed_at = time.time()
-            try:
-                async with asyncio.timeout(75):
-                    await asyncio.to_thread(anyrouter_checkin.execute_check_in, client, 'selected-account', provider, headers)
-            except TimeoutError:
-                if client.sent:
-                    raise TaskError('uncertain', '脚本运行超时，签到结果未确认，不自动重发') from None
-                raise TaskError('script_error', '内置签到脚本未正常结束') from None
-            except TaskError:
-                raise
-            except Exception:
-                raise TaskError('uncertain' if client.sent else 'script_error', '签到请求已发送但结果未确认；不会立即重复提交' if client.sent else '内置签到脚本执行异常') from None
-            if client.response is None:
-                raise TaskError('script_error', '脚本没有返回响应')
-            try:
-                receipt_code, message = checkin_result(client.response.status_code, client.response.text)
-            except TaskError as error:
-                if error.retry_proxy:
-                    raise TaskError('uncertain', '签到请求已提交但回执异常，不自动重试或切换线路补发') from None
-                raise
-            code = receipt_code
-            receipt = json.loads(client.response.text)
-            receipt_message = str(receipt.get('message', receipt.get('msg', ''))).strip()
-            for value in (credentials.get('session'), str(credentials.get('api_user', ''))):
-                if value:
-                    receipt_message = receipt_message.replace(value, '[已隐藏]')
-            receipt_message = ''.join(character for character in receipt_message if character.isprintable())[:300]
-            logs = ['已在浏览器会话中执行固定版本的内置签到脚本；仅提交一次领取请求',
-                    f'网站签到接口返回 HTTP {client.response.status_code}；success={receipt.get("success")}；message={receipt_message or "（空）"}']
-            quota_before = quota_of(before)
-            quota_after = None
-            after = {}
             observed_after = observed_before
-            gain = None
-            for attempt in range(3):
-                try:
-                    status, text = await session.api('/api/user/self', headers=api_headers(credentials))
-                    after = profile_result(status, text, credentials['api_user'])
-                    observed_after = time.time()
-                    quota_after = quota_of(after)
-                    gain = checkin_gain(before, after)
-                except TaskError:
-                    logs.append(f'第 {attempt + 1} 次签到后余额读取失败；仅重试余额查询，不重发签到')
-                if code == 'already_signed' or fixed_reward(gain):
-                    break
-                if attempt < 2:
+            after, gain, receipt_code = {}, None, None
+            code, message = 'uncertain', '尚未确认签到到账'
+            logs, submissions, currency = [], 0, '$'
+
+            def same_day():
+                return len({beijing_day(at) for at in (observed_before, claimed_at, observed_after, time.time())}) == 1
+
+            def zero_credit():
+                return gain == 0 and quota_of(before, 'used_quota') is not None and quota_of(after, 'used_quota') is not None
+
+            for attempt in range(1, 4):
+                if attempt > 1:
                     await asyncio.sleep(1)
-            if code == 'accepted':
+                    try:
+                        after = await read_profile()
+                        observed_after = time.time()
+                        gain = checkin_gain(before, after)
+                    except TaskError:
+                        message = '再次签到前余额读取失败，停止重试并保留待确认'
+                        break
+                    if not same_day():
+                        message = '签到核验跨越北京时间 00:00，停止重试并保留待确认'
+                        break
+                    if fixed_reward(gain):
+                        code, message = 'signed', '延迟到账已确认新增 $25.0000，停止继续签到'
+                        break
+                    if not zero_credit():
+                        message = '再次签到前余额或消耗无法确认净新增为零，停止重试'
+                        break
+                baseline = after if attempt > 1 else before
+                logs.append(f'第 {attempt}/3 次签到前余额 {currency}{quota_of(baseline):.4f}')
+                client.response = None
+                try:
+                    async with asyncio.timeout(75):
+                        await asyncio.to_thread(anyrouter_checkin.execute_check_in, client, 'selected-account', provider, headers)
+                except TimeoutError:
+                    raise TaskError('uncertain' if client.sent else 'script_error', '签到操作超时，结果未确认，停止继续提交') from None
+                except TaskError:
+                    raise
+                except Exception:
+                    raise TaskError('uncertain' if client.sent else 'script_error', '签到响应未确认，停止继续提交') from None
+                submissions += 1
+                if client.response is None:
+                    raise TaskError('uncertain' if client.sent else 'script_error', '签到没有返回响应，停止继续提交')
+                try:
+                    receipt_code, message = checkin_result(client.response.status_code, client.response.text)
+                except TaskError as error:
+                    if error.retry_proxy:
+                        raise TaskError('uncertain', '签到已提交但回执异常，停止继续提交') from None
+                    raise
+                receipt = json.loads(client.response.text)
+                receipt_message = str(receipt.get('message', receipt.get('msg', ''))).strip()
+                for value in (credentials.get('session'), str(credentials.get('api_user', ''))):
+                    if value:
+                        receipt_message = receipt_message.replace(value, '[已隐藏]')
+                receipt_message = ''.join(character for character in receipt_message if character.isprintable())[:300]
+                logs.append(f'第 {attempt}/3 次网站签到接口返回 HTTP {client.response.status_code}；success={receipt.get("success")}；message={receipt_message or "（空）"}')
+                after_read_ok = False
+                for reading in range(3):
+                    after_read_ok = False
+                    try:
+                        after = await read_profile()
+                        observed_after = time.time()
+                        gain = checkin_gain(before, after)
+                        after_read_ok = True
+                    except TaskError:
+                        logs.append(f'第 {reading + 1} 次签到后余额读取失败；只重查余额')
+                    if receipt_code == 'already_signed' or fixed_reward(gain):
+                        break
+                    if reading < 2:
+                        await asyncio.sleep(1)
+                if not same_day():
+                    code, message = 'uncertain', '签到核验跨越北京时间 00:00，无法确定奖励归属日，保留待确认'
+                    break
+                if receipt_code == 'already_signed':
+                    code, message = 'already_signed', '网站明确提示今天已签到，不重复计入奖励'
+                    break
                 if fixed_reward(gain):
                     code, message = 'signed', '签到成功，余额变化加回期间消耗后确认新增 $25.0000'
-                else:
-                    code, message = 'uncertain', '接口已返回，未确认本轮固定 $25 到账；将复核北京时间今日记录，其他金额增加不直接视为签到'
-            if len({beijing_day(at) for at in (observed_before, claimed_at, observed_after, time.time())}) != 1:
-                code, message = 'uncertain', '签到核验跨越北京时间 00:00，无法确定奖励归属日；不计入成功，请按新一天重新核验'
-            logs.append(message)
-            if quota_before is not None and quota_after is not None:
-                delta = round(quota_after - quota_before, 4)
-                logs.append(f'签到前 ${quota_before:.4f} → 签到后 ${quota_after:.4f}，余额变化 {delta:+.4f}')
+                    break
+                code, message = 'uncertain', '未确认固定 $25 到账，请人工核对后点击确认'
+                if after_read_ok and quota_of(after) is not None:
+                    logs.append(f'第 {attempt}/3 次签到后余额 {currency}{quota_of(after):.4f}；本轮累计核验新增 {gain if gain is not None else "未知"}')
+                if not after_read_ok or not zero_credit():
+                    logs.append('余额或消耗读数不完整、发生其他金额变化或请求结果不明，停止继续签到')
+                    break
+                if attempt < 3:
+                    logs.append('已核对本次未到账，将重新查余额后再次签到')
+            quota_before, quota_after = quota_of(before), quota_of(after)
             used_before, used_after = quota_of(before, 'used_quota'), quota_of(after, 'used_quota')
+            logs.append(f'本轮共提交 {submissions} 次签到请求（最多 3 次）')
+            logs.append(message)
+            if quota_after is not None:
+                logs.append(f'签到前 {currency}{quota_before:.4f} → 签到后 {currency}{quota_after:.4f}，余额变化 {quota_after - quota_before:+.4f}')
             if used_before is not None and used_after is not None:
-                logs.append(f'累计消耗 ${used_before:.4f} → ${used_after:.4f}；期间消耗 {used_after - used_before:+.4f}')
-            if code == 'signed':
-                logs.append('签到奖励按固定 $25.0000 记录；其他余额划转不混入签到统计')
+                logs.append(f'累计消耗 {currency}{used_before:.4f} → {currency}{used_after:.4f}；期间消耗 {used_after - used_before:+.4f}')
             return {'code': code, 'message': message, 'quota': quota_after if quota_after is not None else quota_before,
-                    'quota_before': quota_before, 'quota_after': quota_after,
-                    'used_before': used_before, 'used_after': used_after, 'logs': logs,
-                    'receipt_code': receipt_code, 'verified_gain': gain,
+                    'quota_before': quota_before, 'quota_after': quota_after, 'used_before': used_before, 'used_after': used_after,
+                    'logs': logs, 'receipt_code': receipt_code, 'verified_gain': gain, 'attempts': submissions,
                     'reward_amount': 25.0 if code == 'signed' else None,
                     'observed_before': observed_before, 'observed_after': observed_after, 'claimed_at': claimed_at}
 

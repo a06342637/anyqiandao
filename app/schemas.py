@@ -83,12 +83,18 @@ class Selection(StrictModel):
     exclude_ids: list[str] = Field(default_factory=list, max_length=10000)
     validity: Literal['unknown', 'valid', 'invalid', 'blocked', 'network_error'] | None = None
     only_extracted: bool = False
+    needs_confirmation: bool = False
 
 
 class ActionInput(Selection):
     action: Literal['validate', 'balance', 'extract', 'extract_invalid', 'checkin']
     password: str | None = Field(default=None, min_length=1, max_length=4096)
     repair_invalid: bool | None = None
+    retry_unconfirmed: bool = False
+
+
+class CheckinConfirmationInput(StrictModel):
+    day: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
 
 
 class ProxyInput(StrictModel):

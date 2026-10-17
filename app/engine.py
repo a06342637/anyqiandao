@@ -185,6 +185,7 @@ class Engine:
                 raise TaskError('password_required', '没有保存登录密码，请重新输入后提取')
             settings = self.store.settings()
             job['_repair_invalid'] = payload.get('repair_invalid', settings.auto_reextract)
+            job['_retry_unconfirmed'] = payload.get('retry_unconfirmed', False)
             job['_route_operation'] = payload.get('route_operation', 'extract')
             await self.perform(job, account, password, None, settings, None)
 
@@ -416,7 +417,11 @@ class Engine:
             if observed:
                 return observed
             if submitted_today(self.store.daily_state(self.store.account(account['id'])), account['result']['api_user'], time.time()):
-                raise TaskError('uncertain', '今天的签到已提交，本轮只读复核仍无明确到账依据；当天不重复提交')
+                if not job.get('_retry_unconfirmed'):
+                    raise TaskError('uncertain', '今天的签到仍待确认；可手动重新签到核验，或点击确认处理')
+                state = self.store.daily_state(self.store.account(account['id']))
+                self.store.clear_rejected_submission(account['id'], state.submitted_at)
+                self.log_job(job, '管理员主动重新核验待确认账号；先查询余额，本轮最多尝试签到三次')
         job['_checkin_started'] = True
         return await self.service.checkin(account['result'], route, settings,
                     before_submit=lambda profile, observed_at: self.checkin_precheck(account, quota_of(profile), quota_of(profile, 'used_quota'), observed_at),

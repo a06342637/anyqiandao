@@ -11,7 +11,7 @@ from app.checkin_state import DailyCheckinState, observe_balance, confirmed_toda
 from app.errors import TaskError
 from app.schemas import RuntimeSettings
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def checkin_earned(row):
@@ -196,11 +196,18 @@ class Store:
                         state.submitted_at = at
                         connection.execute('UPDATE accounts SET checkin_state_enc=? WHERE id=?', (vault.seal(state.model_dump(), f'checkin-state:{row["id"]}'), row['id']))
                 connection.execute('PRAGMA user_version=10')
+            if version < 11:
+                # Daily evidence can now include an explicit administrator acknowledgement.
+                connection.execute('PRAGMA user_version=11')
 
     @contextmanager
     def connection(self):
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
+        query_time = time.time()
+        connection.create_function('checkin_today_status', 5, lambda identifier, result, state, status, checked:
+            self.daily_view({'id': identifier, 'result_enc': result, 'checkin_state_enc': state,
+                             'checkin_status': status, 'last_checkin': checked}, at=query_time)['today_checkin'])
         connection.execute('PRAGMA foreign_keys=ON')
         connection.execute('PRAGMA secure_delete=ON')
         try:
@@ -318,7 +325,7 @@ class Store:
         return now
 
     def clear_rejected_submission(self, account_id, submitted_at):
-        # Only an explicit invalid-session receipt permits credential repair.
+        # Credential repair or an explicit administrator retry can release the marker.
         with self.transaction() as connection:
             row = connection.execute('SELECT * FROM accounts WHERE id=?', (account_id,)).fetchone()
             state = self.daily_state(row) if row else None
@@ -330,8 +337,11 @@ class Store:
         now = time.time() if at is None else at
         state = self.daily_state(row)
         identity = state.api_user if state else ''
-        today_status = 'confirmed' if confirmed_today(state, identity, now) else 'uncertain' if submitted_today(state, identity, now) else 'unconfirmed'
+        pending_result = (row['checkin_status'] == 'uncertain' and row['last_checkin'] is not None
+                          and row['last_checkin'] <= now and beijing_day(row['last_checkin']) == beijing_day(now))
+        today_status = 'confirmed' if confirmed_today(state, identity, now) else 'uncertain' if submitted_today(state, identity, now) or pending_result else 'unconfirmed'
         return {'checkin_day': beijing_day(now), 'today_checkin': today_status,
+                'manual_confirmation': today_status == 'confirmed' and state.evidence == 'manual',
                 'last_signed_at': state.last_signed_at if state else None}
 
     def public_account(self, row):
@@ -357,6 +367,8 @@ class Store:
         if selection.validity:
             clauses.append('validity=?')
             values.append(selection.validity)
+        if selection.needs_confirmation:
+            clauses.append("checkin_today_status(id,result_enc,checkin_state_enc,checkin_status,last_checkin)='uncertain'")
         if selection.only_extracted or exportable:
             clauses.append('result_enc IS NOT NULL')
         if exportable:

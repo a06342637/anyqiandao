@@ -685,3 +685,7 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; text-align: lef
 .queue-pill.blue .live-dot { animation: none; }
 .queue-pill { font-variant-numeric: tabular-nums; }
 .toast.progress > span:not(.loading-dot) { min-width: 0; overflow-wrap: anywhere; }
+
+.daily-checkin-state { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; }
+.daily-checkin-state .badge { white-space: nowrap; margin: 0; }
+.daily-checkin-state .text-button { flex: none; white-space: nowrap; }

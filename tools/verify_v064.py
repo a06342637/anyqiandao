@@ -25,10 +25,10 @@ class VerifiedReceiptTests(unittest.IsolatedAsyncioTestCase):
     async def test_success_text_without_credit_is_uncertain(self):
         result = await self.run_checkin({'success': True, 'message': '签到成功，获得 $25 额度'},
                                        {'quota': 50000000, 'used_quota': 1000000},
-                                       [{'quota': 50000000, 'used_quota': 1000000}])
+                                       [{'quota': 50000000, 'used_quota': 1000000}], expected_posts=3)
         self.assertEqual(result['code'], 'uncertain')
         self.assertIsNone(result['reward_amount'])
-        self.assertEqual(self.profiles, 4)
+        self.assertEqual(self.profiles, 12)
 
     async def test_success_text_waits_for_delayed_credit(self):
         result = await self.run_checkin({'success': True, 'message': '签到成功'},
@@ -57,7 +57,7 @@ class VerifiedReceiptTests(unittest.IsolatedAsyncioTestCase):
     async def test_usage_without_credit_is_not_a_reward(self):
         result = await self.run_checkin({'success': True, 'message': '签到成功'},
                                        {'quota': 50000000, 'used_quota': 0},
-                                       [{'quota': 37500000, 'used_quota': 12500000}])
+                                       [{'quota': 37500000, 'used_quota': 12500000}], expected_posts=3)
         self.assertEqual((result['code'], result['verified_gain']), ('uncertain', 0))
 
     async def test_explicit_already_signed_does_not_count_new_reward(self):

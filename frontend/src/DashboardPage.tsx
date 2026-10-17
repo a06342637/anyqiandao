@@ -23,7 +23,7 @@ export default function DashboardPage({ timezone, onLogs }: { timezone: string; 
   const accounts = data?.accounts || [];
   usePageClamp(page, data?.accounts.length, limit, setPage);
   const pageItems = accounts.slice((page - 1) * limit, page * limit);
-  const successRate = data && data.attempts ? Math.round(((data.signed + data.already) / data.attempts) * 100) : null;
+  const successRate = data && data.attempts ? Math.round(((data.signed + data.already + data.manual) / data.attempts) * 100) : null;
 
   return <>
     <section className="panel dashboard-panel">
@@ -32,7 +32,7 @@ export default function DashboardPage({ timezone, onLogs }: { timezone: string; 
       <ErrorNotice message={error} retry={reload} />
       <div className="metric-grid">
         <Metric icon={<Coins size={17} />} label={`${label}新增余额`} value={money(data?.earned, 4)} caption="新签到按固定 $25 计入，已签过不重复累计" tone="success-text" />
-        <Metric icon={<TrendingUp size={17} />} label={`${label}签到次数`} value={data ? `${data.signed + data.already}` : '—'} caption={data ? `成功 ${data.signed} · 已签过 ${data.already} · 失败 ${data.failed}` : '含自动与手动签到'} />
+        <Metric icon={<TrendingUp size={17} />} label={`${label}签到次数`} value={data ? `${data.signed + data.already}` : '—'} caption={data ? `成功 ${data.signed} · 已签过 ${data.already} · 失败 ${data.failed} · 人工确认 ${data.manual}` : '含自动与手动签到'} />
         <Metric icon={<ShieldCheck size={17} />} label="确认成功率" value={successRate === null ? '—' : `${successRate}%`} caption={data ? `${data.attempts} 次尝试${data.uncertain ? ` · ${data.uncertain} 次待确认` : ''}` : '按尝试次数计算'} tone={successRate !== null && successRate < 80 ? 'warning-text' : ''} />
         <Metric icon={<Trophy size={17} />} label="账号总余额" value={money(data?.balance_total)} caption={data ? `${data.balance_accounts} / ${data.accounts_total} 个账号有余额数据` : '以最近一次成功读取为准'} />
       </div>
@@ -52,7 +52,7 @@ export default function DashboardPage({ timezone, onLogs }: { timezone: string; 
     </section>
     <section className="panel">
       <div className="panel-heading"><div className="heading-icon"><CalendarDays size={19} /></div><div><h2>账号明细 <span className="count-pill">{data ? accounts.length : '—'}</span></h2><p>按{label}新增余额排序；余额为该账号最近一次成功读取的值</p></div><div className="panel-tools"><Button onClick={() => setHistory('all')}><FileText size={15} />管理明细日志</Button><Button onClick={() => setRetention(true)}><Clock3 size={15} />日志保留</Button></div></div>
-      {!data ? !error && <LoadingState label="正在读取签到统计" /> : !pageItems.length ? <EmptyState title="还没有账号" description="添加账号后，可在签到管理中执行或安排签到；这里会展示每个账号的余额与统计。" /> : <div className="table-container stats-container"><table className="stats-table"><thead><tr><th>账号</th><th>{label}新增</th><th>签到 / 已签 / 失败</th><th>当前余额 / 最近签到变化</th><th>今日状态 / 最近尝试</th></tr></thead><tbody>{pageItems.map(row => <tr key={row.account_id}><td><strong>{row.username}</strong>{row.note && <small>{row.note}</small>}</td><td className={row.earned > 0 ? 'success-text' : 'muted'}>{row.earned > 0 ? `+${money(row.earned, 4)}` : '—'}</td><td className="tabular">{row.signed} / {row.already} / <span className={row.failed ? 'warning-text' : ''}>{row.failed}</span>{row.uncertain > 0 && <small className="warning-text">{row.uncertain} 次待确认</small>}</td><td className="tabular">{money(row.quota, 4)}<BalanceDetail balance={row.last_balance} /></td><td><DailyCheckinBadge state={row} /><small>最近尝试 {formatTime(row.last, 'Asia/Shanghai')}</small><button className="text-button" onClick={() => setHistory({ id: row.account_id, username: row.username })}><FileText size={13} />明细日志</button></td></tr>)}</tbody></table></div>}
+      {!data ? !error && <LoadingState label="正在读取签到统计" /> : !pageItems.length ? <EmptyState title="还没有账号" description="添加账号后，可在签到管理中执行或安排签到；这里会展示每个账号的余额与统计。" /> : <div className="table-container stats-container"><table className="stats-table"><thead><tr><th>账号</th><th>{label}新增</th><th>签到 / 已签 / 失败</th><th>当前余额 / 最近签到变化</th><th>今日状态 / 最近尝试</th></tr></thead><tbody>{pageItems.map(row => <tr key={row.account_id}><td><strong>{row.username}</strong>{row.note && <small>{row.note}</small>}</td><td className={row.earned > 0 ? 'success-text' : 'muted'}>{row.earned > 0 ? `+${money(row.earned, 4)}` : '—'}</td><td className="tabular">{row.signed} / {row.already} / <span className={row.failed ? 'warning-text' : ''}>{row.failed}</span>{row.manual > 0 && <small className="muted">{row.manual} 次人工确认</small>}{row.uncertain > 0 && <small className="warning-text">{row.uncertain} 次待确认</small>}</td><td className="tabular">{money(row.quota, 4)}<BalanceDetail balance={row.last_balance} /></td><td><DailyCheckinBadge state={row} accountId={row.account_id} username={row.username} /><small>最近尝试 {formatTime(row.last, 'Asia/Shanghai')}</small><button className="text-button" onClick={() => setHistory({ id: row.account_id, username: row.username })}><FileText size={13} />明细日志</button></td></tr>)}</tbody></table></div>}
       {data && <Pagination page={page} total={accounts.length} limit={limit} onChange={setPage} onLimitChange={setLimit} />}
       <div className="panel-footnote"><ShieldCheck size={14} />签到统计保留 {data?.stats_retention_days ?? 90} 天，可在设置中调整；清理明细仅影响历史统计，不清除每日签到依据和账号凭证。</div>
     </section>

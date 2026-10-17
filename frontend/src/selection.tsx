@@ -3,7 +3,7 @@ import type { Account, PageData, Selection } from './types';
 import { useResource } from './api';
 import { Badge, Button, EmptyState, ErrorNotice, Pagination, usePageClamp, usePageSize } from './ui';
 
-export function useSelection(filter: Pick<Selection, 'validity' | 'only_extracted'> = {}) {
+export function useSelection(filter: Pick<Selection, 'validity' | 'only_extracted' | 'needs_confirmation'> = {}) {
   const [ids, setIds] = useState<Set<string>>(new Set());
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
