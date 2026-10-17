@@ -21,7 +21,7 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 from playwright.async_api import async_playwright
 
 from app.config import TARGET_ORIGIN
-from app.checkin_state import balance_credit, fixed_reward
+from app.checkin_state import balance_credit, beijing_day, fixed_reward
 from app.console_data import read_console
 from app.errors import TaskError
 from app.proxy import allowed_destination
@@ -314,6 +314,8 @@ class RouterService:
             status, text = await session.api('/api/user/self', headers=api_headers(credentials))
             before = profile_result(status, text, credentials['api_user'])
             observed_before = time.time()
+            if quota_of(before) is None:
+                raise TaskError('upstream_error', '未读取到有效的签到前余额，本次未提交签到，请稍后重试')
             if before_submit:
                 observed = before_submit(before, observed_before)
                 if observed:
@@ -363,9 +365,8 @@ class RouterService:
                     quota_after = quota_of(after)
                     gain = checkin_gain(before, after)
                 except TaskError:
-                    logs.append('领取请求已返回，但最新余额读取失败；不会重发签到请求')
-                    break
-                if code in ('already_signed', 'signed') or fixed_reward(gain):
+                    logs.append(f'第 {attempt + 1} 次签到后余额读取失败；仅重试余额查询，不重发签到')
+                if code == 'already_signed' or fixed_reward(gain):
                     break
                 if attempt < 2:
                     await asyncio.sleep(1)
@@ -374,6 +375,8 @@ class RouterService:
                     code, message = 'signed', '签到成功，余额变化加回期间消耗后确认新增 $25.0000'
                 else:
                     code, message = 'uncertain', '接口已返回，未确认本轮固定 $25 到账；将复核北京时间今日记录，其他金额增加不直接视为签到'
+            if len({beijing_day(at) for at in (observed_before, claimed_at, observed_after, time.time())}) != 1:
+                code, message = 'uncertain', '签到核验跨越北京时间 00:00，无法确定奖励归属日；不计入成功，请按新一天重新核验'
             logs.append(message)
             if quota_before is not None and quota_after is not None:
                 delta = round(quota_after - quota_before, 4)

@@ -302,10 +302,11 @@ class ReceiptTests(unittest.IsolatedAsyncioTestCase):
         result = await self.run_checkin({'success': False, 'message': '今天已经签到'}, {'quota': 50000000}, [{'quota': 62500000}])
         self.assertEqual(result['code'], 'already_signed')
 
-    async def test_explicit_success_survives_balance_read_failure(self):
+    async def test_explicit_success_requires_balance_verification(self):
         result = await self.run_checkin({'success': True, 'message': '签到成功，获得 $25 额度'}, {'quota': 50000000}, [TaskError('network_error', 'fixture read failure')])
-        self.assertEqual(result['code'], 'signed')
+        self.assertEqual(result['code'], 'uncertain')
         self.assertIsNone(result['quota_after'])
+        self.assertIsNone(result['reward_amount'])
 
     async def test_blank_success_with_missing_after_balance_is_unconfirmed(self):
         result = await self.run_checkin({'success': True}, {'quota': 50000000}, [TaskError('network_error', 'fixture read failure')])
@@ -319,7 +320,7 @@ class ReceiptTests(unittest.IsolatedAsyncioTestCase):
     def test_receipt_parser_requires_explicit_success(self):
         self.assertEqual(checkin_result(200, '{"success":true,"message":""}')[0], 'accepted')
         self.assertEqual(checkin_result(200, '{"code":0}')[0], 'accepted')
-        self.assertEqual(checkin_result(200, '{"success":true,"message":"签到成功"}')[0], 'signed')
+        self.assertEqual(checkin_result(200, '{"success":true,"message":"签到成功"}')[0], 'accepted')
         for payload in ({'success': 'true'}, {'success': False, 'code': 0}, {'code': False}, {'ret': True}):
             with self.subTest(payload=payload), self.assertRaises(TaskError):
                 checkin_result(200, json.dumps(payload))

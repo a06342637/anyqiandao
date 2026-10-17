@@ -7,8 +7,7 @@ from datetime import datetime
 import httpx
 
 from app.config import TARGET_ORIGIN
-from app.checkin_state import BEIJING, beijing_day, confirmed_today, submitted_today, fixed_reward
-from app.db import checkin_earned
+from app.checkin_state import BEIJING, balance_credit, beijing_day, confirmed_today, submitted_today, fixed_reward
 from app.errors import HostKeyRequired, TaskError
 from app.proxy import ProxyBridge, detect_protocol
 from app.router_service import RouterService, quota_of
@@ -401,8 +400,6 @@ class Engine:
             message = result['message']
             if before is not None and after is not None:
                 message += f'；签到前 ${before:.4f} → 签到后 ${after:.4f}，变化 {after - before:+.4f}'
-            elif result['code'] == 'signed' and result.get('reward_amount') is not None:
-                message += '；余额未完整读取，网站明确回执确认的签到奖励按固定 $25.0000 记录'
             elif result['code'] in ('signed', 'already_signed'):
                 message += '；余额未完整读取，新增金额暂不计入统计'
             self.complete_account(job, "UPDATE accounts SET validity='valid',message=?,last_validated=?,last_checkin=?,checkin_status=?,quota=COALESCE(?,quota),proxy_id=?,updated=? WHERE id=?",
@@ -445,10 +442,17 @@ class Engine:
         if result.get('receipt_code'):
             before_at = result.get('observed_before', now)
             after_at = result.get('observed_after', now)
+            gain = balance_credit({'quota': result.get('quota_before'), 'used_quota': result.get('used_before')},
+                                  {'quota': result.get('quota_after'), 'used_quota': result.get('used_after')})
+            same_day = len({beijing_day(at) for at in (before_at, result.get('claimed_at', before_at), after_at, now)}) == 1
+            if result['code'] == 'signed' and (not fixed_reward(gain) or not same_day):
+                result = {**result, 'code': 'uncertain', 'reward_amount': None,
+                          'message': '未通过北京时间当日签到前后余额核验，不能确认固定 $25 到账'}
             self.store.observe_account(account['id'], identity, result.get('quota_before'), result.get('used_before'), at=before_at)
-            confirm = result['code'] in ('signed', 'already_signed') and beijing_day(result.get('claimed_at', before_at)) == beijing_day(after_at)
+            confirm = same_day and (result['code'] == 'signed' and fixed_reward(gain)
+                                   or result['code'] == 'already_signed' and result['receipt_code'] == 'already_signed')
             self.store.observe_account(account['id'], identity, result.get('quota_after'), result.get('used_after'), at=after_at,
-                                       confirm=confirm, evidence='receipt')
+                                       confirm=confirm, evidence='balance_25' if result['code'] == 'signed' else 'receipt')
         if (result['code'] != 'uncertain' or result.get('receipt_code') != 'accepted'
                 or beijing_day(result.get('claimed_at', now)) != beijing_day(now)):
             return result
@@ -464,7 +468,8 @@ class Engine:
         previous = self.store.all("SELECT * FROM checkins WHERE account_id=? AND code='signed' AND balance_source='live' AND created>=? AND created<=? ORDER BY created DESC,id DESC",
                                   (account['id'], since, now))
         for record in previous:
-            earned = checkin_earned(record)
+            earned = balance_credit({'quota': record['quota_before'], 'used_quota': record['used_before']},
+                                   {'quota': record['quota_after'], 'used_quota': record['used_after']})
             if earned is None or not fixed_reward(float(earned)):
                 continue
             checked_at = datetime.fromtimestamp(record['created'], BEIJING).strftime('%Y-%m-%d %H:%M:%S')

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { CalendarDays, Clock3, Coins, FileText, Gauge, ShieldCheck, TrendingUp, Trophy } from 'lucide-react';
 import { formatTime, useResource } from './api';
-import { Badge, Button, EmptyState, ErrorNotice, LoadingState, Pagination, RefreshButton, usePageClamp, usePageSize } from './ui';
+import { Button, EmptyState, ErrorNotice, LoadingState, Pagination, RefreshButton, usePageClamp, usePageSize } from './ui';
 import type { Stats } from './types';
 import BalanceDetail from './BalanceDetail';
+import DailyCheckinBadge from './DailyCheckinBadge';
 import CheckinHistory from './CheckinHistory';
 import RetentionSettings from './RetentionSettings';
 
@@ -51,7 +52,7 @@ export default function DashboardPage({ timezone, onLogs }: { timezone: string; 
     </section>
     <section className="panel">
       <div className="panel-heading"><div className="heading-icon"><CalendarDays size={19} /></div><div><h2>账号明细 <span className="count-pill">{data ? accounts.length : '—'}</span></h2><p>按{label}新增余额排序；余额为该账号最近一次成功读取的值</p></div><div className="panel-tools"><Button onClick={() => setHistory('all')}><FileText size={15} />管理明细日志</Button><Button onClick={() => setRetention(true)}><Clock3 size={15} />日志保留</Button></div></div>
-      {!data ? !error && <LoadingState label="正在读取签到统计" /> : !pageItems.length ? <EmptyState title="还没有账号" description="添加账号后，可在签到管理中执行或安排签到；这里会展示每个账号的余额与统计。" /> : <div className="table-container stats-container"><table className="stats-table"><thead><tr><th>账号</th><th>{label}新增</th><th>签到 / 已签 / 失败</th><th>当前余额 / 最近签到变化</th><th>最近签到 / 日志</th></tr></thead><tbody>{pageItems.map(row => <tr key={row.account_id}><td><strong>{row.username}</strong>{row.note && <small>{row.note}</small>}</td><td className={row.earned > 0 ? 'success-text' : 'muted'}>{row.earned > 0 ? `+${money(row.earned, 4)}` : '—'}</td><td className="tabular">{row.signed} / {row.already} / <span className={row.failed ? 'warning-text' : ''}>{row.failed}</span>{row.uncertain > 0 && <small className="warning-text">{row.uncertain} 次待确认</small>}</td><td className="tabular">{money(row.quota, 4)}<BalanceDetail balance={row.last_balance} /></td><td>{row.last_code ? <Badge status={row.last_code} /> : <span className="muted">尚未签到</span>}<small>{formatTime(row.last, timezone)}</small><button className="text-button" onClick={() => setHistory({ id: row.account_id, username: row.username })}><FileText size={13} />明细日志</button></td></tr>)}</tbody></table></div>}
+      {!data ? !error && <LoadingState label="正在读取签到统计" /> : !pageItems.length ? <EmptyState title="还没有账号" description="添加账号后，可在签到管理中执行或安排签到；这里会展示每个账号的余额与统计。" /> : <div className="table-container stats-container"><table className="stats-table"><thead><tr><th>账号</th><th>{label}新增</th><th>签到 / 已签 / 失败</th><th>当前余额 / 最近签到变化</th><th>今日状态 / 最近尝试</th></tr></thead><tbody>{pageItems.map(row => <tr key={row.account_id}><td><strong>{row.username}</strong>{row.note && <small>{row.note}</small>}</td><td className={row.earned > 0 ? 'success-text' : 'muted'}>{row.earned > 0 ? `+${money(row.earned, 4)}` : '—'}</td><td className="tabular">{row.signed} / {row.already} / <span className={row.failed ? 'warning-text' : ''}>{row.failed}</span>{row.uncertain > 0 && <small className="warning-text">{row.uncertain} 次待确认</small>}</td><td className="tabular">{money(row.quota, 4)}<BalanceDetail balance={row.last_balance} /></td><td><DailyCheckinBadge state={row} /><small>最近尝试 {formatTime(row.last, 'Asia/Shanghai')}</small><button className="text-button" onClick={() => setHistory({ id: row.account_id, username: row.username })}><FileText size={13} />明细日志</button></td></tr>)}</tbody></table></div>}
       {data && <Pagination page={page} total={accounts.length} limit={limit} onChange={setPage} onLimitChange={setLimit} />}
       <div className="panel-footnote"><ShieldCheck size={14} />签到统计保留 {data?.stats_retention_days ?? 90} 天，可在设置中调整；清理明细仅影响历史统计，不清除每日签到依据和账号凭证。</div>
     </section>

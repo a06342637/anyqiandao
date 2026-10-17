@@ -4,7 +4,6 @@ from app.errors import TaskError
 
 EXPIRED = ('未登录', '请先登录', '登录已过期', '登录已失效', '登录状态无效', '登录状态已失效', '登录状态已过期', '登录信息已过期', 'cookie已失效', 'cookie失效', 'cookie已过期', 'cookie过期', 'cookie无效', 'session expired', 'session has expired', 'session is invalid', 'invalid session', 'cookie expired', 'cookie has expired', 'cookie is invalid', 'invalid cookie', 'not logged', 'unauthenticated')
 ALREADY = ('已经签到', '已签到', '重复签到', 'already checked', 'already signed')
-SIGNED = ('签到成功', 'check-in successful', 'check in successful', 'checked in successfully', 'sign-in successful', 'signed in successfully')
 CAPTCHA = ('captcha', 'challenges.cloudflare.com', '人机验证', '安全验证', '验证码', '滑动验证')
 
 
@@ -63,7 +62,5 @@ def checkin_result(status, text):
     if explicit is None:
         success = (type(payload.get('ret')) is int and payload['ret'] == 1) or (type(payload.get('code')) is int and payload['code'] == 0)
     if success:
-        if any(marker in message for marker in SIGNED):
-            return 'signed', '网站确认签到成功'
         return 'accepted', '网站已接受签到请求，尚需核实新增额度'
     raise TaskError('checkin_failed', '网站未确认签到成功，请查看网站状态后重试')

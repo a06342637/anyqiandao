@@ -3,7 +3,10 @@ export interface CheckinBalance {
   used_before: number | null; used_after: number | null;
   created: number; balance_source: 'live' | 'legacy';
 }
-export interface Account {
+export interface DailyCheckin {
+  checkin_day: string; today_checkin: 'confirmed' | 'uncertain' | 'unconfirmed'; last_signed_at: number | null;
+}
+export interface Account extends DailyCheckin {
   checkin_route: NetworkRoute;
   id: string; username: string; validity: string; message: string; has_password: boolean; has_result: boolean;
   credential_source: 'password' | 'session' | 'missing';
@@ -61,7 +64,7 @@ export interface LogEntry {
   id: number; job_id: string | null; account_id: string | null; kind: string; level: string; message: string; created: number; username: string | null; category: string;
 }
 export interface ActionResult { queued: number; skipped?: number; filtered_count?: number; needs_password?: string[]; needs_password_count?: number; job_ids?: string[]; }
-export interface StatsAccount {
+export interface StatsAccount extends DailyCheckin {
   account_id: string; username: string; note: string; quota: number | null; validity: string; signed: number; already: number; failed: number; uncertain: number;
   earned: number; last: number | null; last_code: string | null; last_balance: CheckinBalance | null;
 }

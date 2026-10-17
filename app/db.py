@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from decimal import Decimal
 
 from app.crypto import Vault
-from app.checkin_state import DailyCheckinState, observe_balance, submitted_today, beijing_day
+from app.checkin_state import DailyCheckinState, observe_balance, confirmed_today, submitted_today, beijing_day
 from app.errors import TaskError
 from app.schemas import RuntimeSettings
 
@@ -326,13 +326,22 @@ class Store:
                 state.submitted_at = None
                 connection.execute('UPDATE accounts SET checkin_state_enc=? WHERE id=?', (self.vault.seal(state.model_dump(), f'checkin-state:{account_id}'), account_id))
 
+    def daily_view(self, row, *, at=None):
+        now = time.time() if at is None else at
+        state = self.daily_state(row)
+        identity = state.api_user if state else ''
+        today_status = 'confirmed' if confirmed_today(state, identity, now) else 'uncertain' if submitted_today(state, identity, now) else 'unconfirmed'
+        return {'checkin_day': beijing_day(now), 'today_checkin': today_status,
+                'last_signed_at': state.last_signed_at if state else None}
+
     def public_account(self, row):
         login = self.vault.open(row['login_enc'], f'login:{row["id"]}')
         return {key: row[key] for key in ('id', 'validity', 'message', 'last_validated', 'last_extracted', 'last_checkin',
                                          'checkin_status', 'quota', 'created', 'updated', 'note', 'position')} | {
             'username': login['username'], 'has_password': bool(login.get('password')), 'has_result': bool(row['result_enc']),
             'credential_source': 'password' if login.get('password') else 'session' if row['result_enc'] else 'missing',
-            'last_balance': self.checkin_balance(account_id=row['id']), 'checkin_route': json.loads(row['checkin_route'])}
+            'last_balance': self.checkin_balance(account_id=row['id']), 'checkin_route': json.loads(row['checkin_route']),
+            **self.daily_view(row)}
 
     def selection_where(self, selection, *, exportable=False):
         clauses, values = [], []

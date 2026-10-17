@@ -22,7 +22,7 @@ def checkin_statistics(store, span):
     with store.connection() as snapshot:
         snapshot.execute('BEGIN')
         rows = [dict(row) for row in snapshot.execute('SELECT account_id,code,quota_before,quota_after,used_before,used_after,created,balance_source,reward_amount FROM checkins WHERE created>=? AND created<=? ORDER BY created,id', (since, until))]
-        accounts = [dict(row) for row in snapshot.execute('SELECT id,login_enc,quota,validity,checkin_status,last_checkin,note FROM accounts ORDER BY position,created')]
+        accounts = [dict(row) for row in snapshot.execute('SELECT id,login_enc,quota,validity,checkin_status,last_checkin,note,checkin_state_enc,result_enc FROM accounts ORDER BY position,created')]
         latest = {row['account_id']: balance_view(row) for row in snapshot.execute('SELECT * FROM (SELECT account_id,code,quota_before,quota_after,used_before,used_after,created,balance_source,reward_amount,ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY created DESC,id DESC) AS ranking FROM checkins WHERE created<=?) WHERE ranking=1', (until,))}
     totals = counters()
     series = {}
@@ -50,6 +50,7 @@ def checkin_statistics(store, span):
         balance = latest.get(account['id'])
         table.append({'account_id': account['id'], 'username': store.vault.open(account['login_enc'], f'login:{account["id"]}')['username'],
                       'note': account['note'], 'quota': account['quota'], 'validity': account['validity'], **entry, 'earned': amount(entry['earned']),
+                      **store.daily_view(account, at=until),
                       'last': balance['created'] if balance else account['last_checkin'], 'last_code': balance['code'] if balance else account['checkin_status'], 'last_balance': balance})
     table.sort(key=lambda item: (-item['earned'], -(item['signed'] + item['already']), item['username']))
     for bucket in series.values():

@@ -3,6 +3,7 @@ import { ArrowDownToLine, BarChart3, CheckCheck, Coins, Copy, FileText, Filter, 
 import { api, copyText, downloadBlob, fetchApi, formatTime, refreshData, useResource } from './api';
 import { Badge, Button, EmptyState, ErrorNotice, LoadingState, Modal, Pagination, RefreshButton, useConfirm, usePageClamp, usePageSize, useToast, useTrack } from './ui';
 import CredentialImport from './CredentialImport';
+import DailyCheckinBadge from './DailyCheckinBadge';
 import AccountInsights, { type InsightView } from './AccountInsights';
 import { useSelection } from './selection';
 import type { Account, ActionResult, PageData } from './types';
@@ -172,7 +173,11 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
           </div></details>
         </td>
         <td data-label="凭证与时间" className="account-status-cell"><Badge status={account.validity} /><small className="account-message" title={account.message}>{account.message || '等待提取或检测'}</small><div className="account-time-list"><small>更新<span>{formatTime(account.last_extracted, timezone)}</span></small><small>检测<span>{formatTime(account.last_validated, timezone)}</span></small></div></td>
-        <td data-label="余额" className="account-balance"><div className="quota-line"><span className="quota-value">{account.quota !== null ? `$${account.quota.toFixed(4)}` : '待读取'}</span><button className="icon-button tiny" title="检测余额（使用“检测余额”线路）" aria-label={`刷新 ${account.username} 的余额`} disabled={busy || !account.has_result} onClick={() => void action('balance', account)}><RefreshCw size={14} /></button></div><small className="date-cell" title="最近一次签到任务时间（北京时间）；具体结果请查看明细日志">上次签到 {formatTime(account.last_checkin, 'Asia/Shanghai')}</small></td>
+        <td data-label="余额" className="account-balance"><div className="quota-line"><span className="quota-value">{account.quota !== null ? `$${account.quota.toFixed(4)}` : '待读取'}</span><button className="icon-button tiny" title="检测余额（使用“检测余额”线路）" aria-label={`刷新 ${account.username} 的余额`} disabled={busy || !account.has_result} onClick={() => void action('balance', account)}><RefreshCw size={14} /></button></div>
+          <DailyCheckinBadge state={account} />
+          <small className="date-cell" title="最近一次确认签到的时间（北京时间）">上次确认 {formatTime(account.last_signed_at, 'Asia/Shanghai')}</small>
+          <small className="date-cell" title="最近一次签到任务时间，可能失败或未到账；不代表签到成功">最近尝试 {formatTime(account.last_checkin, 'Asia/Shanghai')}</small>
+        </td>
         <td className="account-operations-cell"><div className="account-action-grid">
           <Button aria-label={`检测 ${account.username}`} disabled={busy || (!account.has_result && !(repairInvalid && account.has_password))} onClick={() => void action('validate', account)}><ShieldCheck size={13} />检测</Button>
           <Button aria-label={`签到 ${account.username}`} disabled={busy || (!account.has_result && !account.has_password)} onClick={() => void action('checkin', account)}><Play size={13} />签到</Button>

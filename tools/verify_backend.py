@@ -285,7 +285,7 @@ async def verify():
         except TaskError as error:
             check(error.code == expected, 'response classification ' + str(status) + expected)
     check(checkin_result(200, '{"success":true}')[0] == 'accepted', 'empty success receipt requires balance verification')
-    check(checkin_result(200, '{"success":true,"message":"签到成功"}')[0] == 'signed', 'explicit sign-in receipt confirms success')
+    check(checkin_result(200, '{"success":true,"message":"签到成功"}')[0] == 'accepted', 'explicit sign-in receipt still requires balance verification')
     check(checkin_result(200, '{"success":false,"message":"already checked"}')[0] == 'already_signed', 'already signed is not failure')
     try:
         profile_result(200, '{"success":true,"data":{"id":7}}', '8')

@@ -215,13 +215,14 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.checkin_balance(job_id=job['id'])['earned'], 25)
         self.assertTrue(confirmed_today(self.store.daily_state(self.store.account(identifier)), '42', time.time()))
 
-    async def test_explicit_receipt_with_invite_transfer_counts_only_25(self):
+    async def test_explicit_receipt_with_invite_transfer_is_unconfirmed(self):
         identifier = account(self.store)
         self.service.result = self.receipt(code='signed', receipt_code='signed', verified_gain=100,
                                           quota_before=100, quota_after=200, quota=200, reward_amount=25)
         job = await self.perform(identifier)
         self.assertEqual(self.store.checkin_balance(job_id=job['id'])['delta'], 100)
-        self.assertEqual((await self.client.get('/api/v1/stats')).json()['earned'], 25)
+        self.assertEqual(job['status'], 'uncertain')
+        self.assertEqual((await self.client.get('/api/v1/stats')).json()['earned'], 0)
 
     async def test_pre_request_daily_increase_resolves_empty_response(self):
         identifier = account(self.store)
@@ -317,9 +318,10 @@ class FixedReceiptTests(unittest.IsolatedAsyncioTestCase):
                                        [{'quota': 47500000, 'used_quota': 15000000}])
         self.assertEqual((result['code'], result['reward_amount']), ('signed', 25))
 
-    async def test_explicit_receipt_does_not_count_entire_transfer(self):
+    async def test_explicit_receipt_without_exact_reward_is_unconfirmed(self):
         result = await self.run_checkin({'success': True, 'message': '签到成功'}, {'quota': 50000000}, [{'quota': 100000000}])
-        self.assertEqual(result['reward_amount'], 25)
+        self.assertEqual(result['code'], 'uncertain')
+        self.assertIsNone(result['reward_amount'])
         self.assertLessEqual(result['observed_before'], result['observed_after'])
 
 
