@@ -152,3 +152,57 @@
   .token-pagination { flex-wrap: wrap; }
   .token-pagination > span { width: 100%; }
 }
+.input-panel { --entry-gutter: 24px; }
+.account-entry-content { padding-inline: var(--entry-gutter); min-width: 0; }
+.input-panel .account-entry-content form { padding: 0; }
+.account-entry-content > .segmented { margin: 0 0 22px; }
+.account-entry-content > .notice { margin: 14px 0 0; }
+.account-entry-content .provider-choice { margin-bottom: 22px; }
+.account-entry-content .form-hint { font-weight: 400; overflow-wrap: anywhere; }
+.account-entry-content .secure-note { align-items: flex-start; line-height: 1.7; }
+.account-entry-content .secure-note svg { flex: 0 0 15px; margin-top: 3px; }
+
+.picker-heading { gap: 8px; }
+.picker-toolbar { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 12px 14px 8px; }
+.picker-platform { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--ink-2); min-width: 0; }
+.picker-platform select { width: 168px; max-width: 100%; min-height: 36px; font-size: 13px; }
+.picker-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.picker-actions .button { min-height: 34px; font-size: 12px; padding: 6px 10px; }
+.picker-scope { padding: 0 14px 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.picker-list { max-height: 240px; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.picker-row { min-height: 52px; gap: 10px; }
+.picker-row input[type="checkbox"] { flex: none; margin: 0; }
+.picker-identity { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.picker-identity small { color: var(--muted); font-size: 10.5px; }
+.picker-row .badge { flex: none; }
+.account-picker > .form-hint { margin: 0; border-top: 1px solid var(--line); line-height: 1.7; }
+.account-picker .loading-state { padding: 28px 14px; }
+
+.modal.schedule-editor { padding: 0; height: min(880px, calc(100dvh - 48px)); display: flex; flex-direction: column; overflow: hidden; }
+.schedule-editor > .modal-heading { padding: 24px 24px 18px; margin: 0; border-bottom: 1px solid var(--line); flex: none; }
+.schedule-editor > form { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.schedule-editor-content { padding: 20px 24px; min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.schedule-editor .modal-actions { padding: 14px 24px; margin: 0; flex: none; background: var(--panel); }
+.schedule-editor .modal-actions .button { min-width: 88px; }
+
+@media (max-width: 1180px) {
+  .input-panel { --entry-gutter: 20px; }
+}
+@media (max-width: 900px) {
+  .extract-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .input-panel { --entry-gutter: 16px; }
+  .account-entry-content > .segmented { gap: 18px; margin-bottom: 18px; }
+  .account-entry-content .provider-choice { margin-bottom: 18px; }
+  .picker-toolbar { align-items: stretch; }
+  .picker-platform { flex: 1 0 100%; }
+  .picker-platform select { flex: 1; width: auto; font-size: 15px; }
+  .picker-actions { width: 100%; }
+  .picker-actions .button { min-height: 38px; }
+  .picker-list { max-height: 208px; }
+  .modal.schedule-editor { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
+  .schedule-editor > .modal-heading { padding: 18px 16px 14px; }
+  .schedule-editor-content { padding: 16px; }
+  .schedule-editor .modal-actions { padding: 12px 16px; }
+}
