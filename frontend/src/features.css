@@ -40,9 +40,24 @@
 .account-layout .row-selection-controls { justify-content: center; gap: 3px; margin-top: 7px; }
 .account-layout .drag-handle { width: 24px; }
 .account-layout .account-identity > strong { display: block; font-size: 14px; margin-bottom: 9px; }
-.credential-source { display: block; width: fit-content; max-width: 100%; font-size: 10.5px; line-height: 1.5; border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; color: var(--ink-2); }
+.account-labels { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.credential-source { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; font-size: 10.5px; line-height: 1.5; border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; color: var(--ink-2); }
+.credential-source.platform.anyrouter { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-ring); }
+.credential-source.platform.agentrouter { color: var(--green); background: var(--green-bg); }
 .credential-source.automatic { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-ring); }
 .credential-source.manual { color: var(--amber); background: var(--amber-bg); }
+.account-filters { display: grid; gap: 10px; min-width: 0; }
+.account-filter-scroll { display: flex; align-items: center; gap: 14px; min-width: 0; max-width: 100%; overflow-x: auto; padding: 3px; scrollbar-width: thin; }
+.account-filter-scroll > svg { flex-shrink: 0; }
+.account-filter-group { display: flex; align-items: center; flex-shrink: 0; gap: 6px; }
+.account-filter-group + .account-filter-group { border-left: 1px solid var(--line); padding-left: 14px; }
+.account-filter-button { flex-shrink: 0; white-space: nowrap; min-height: 32px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 12px; line-height: 1.5; background: var(--panel); color: var(--ink-2); transition: background 0.15s, border-color 0.15s, color 0.15s; }
+.account-filter-button:hover { border-color: var(--accent-ring); color: var(--accent); }
+.account-filter-button.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.account-filter-options { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
+@media (max-width: 760px) {
+  .account-filter-options .button { margin-left: 0; padding: 6px 0; min-height: 30px; font-size: 12px; }
+}
 .account-layout .account-note { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 8px; line-height: 1.6; }
 .account-copy-menu { margin-top: 11px; font-size: 11px; }
 .account-copy-menu summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); list-style: none; padding: 4px 0; }
