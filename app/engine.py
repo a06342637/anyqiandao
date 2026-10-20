@@ -2,12 +2,11 @@ import asyncio
 import hashlib
 import sqlite3
 import time
-from datetime import datetime
 
 import httpx
 
 from app.config import TARGET_ORIGIN
-from app.checkin_state import BEIJING, balance_credit, beijing_day, confirmed_today, submitted_today, fixed_reward
+from app.checkin_state import balance_credit, beijing_day, submitted_today, fixed_reward
 from app.errors import HostKeyRequired, TaskError
 from app.proxy import ProxyBridge, detect_protocol
 from app.router_service import RouterService, quota_of
@@ -447,6 +446,8 @@ class Engine:
                 await self.refresh_for_checkin(job, account, password, route, settings, proxy_id)
                 result, proxy_id = await self.routed(job, account, 'checkin', settings, lambda active_route: self.checkin_or_observed(job, account, active_route, settings))
             result = self.resolve_checkin_receipt(account, result, settings)
+            if result['code'] in ('signed', 'no_credit') and job.get('_submission_at'):
+                self.store.clear_rejected_submission(account['id'], job['_submission_at'])
             now = time.time()
             before, after = result.get('quota_before'), result.get('quota_after')
             message = result['message']
@@ -461,19 +462,27 @@ class Engine:
                 self.log_job(job, line, kind='script')
 
     async def checkin_or_observed(self, job, account, route, settings):
-        state = self.store.daily_state(self.store.account(account['id']))
+        current = self.store.account(account['id'])
+        state = self.store.daily_state(current)
         continuation = job.get('_checkin_continuation')
-        if not continuation and (confirmed_today(state, account['result']['api_user'], time.time()) or submitted_today(state, account['result']['api_user'], time.time())):
-            result = await self.service.validate(account['result'], route, settings)
-            observed = self.checkin_precheck(account, result.get('quota'), quota_of(result.get('profile') or {}, 'used_quota'), time.time())
-            if observed:
-                return observed
-            if submitted_today(self.store.daily_state(self.store.account(account['id'])), account['result']['api_user'], time.time()):
-                if not job.get('_retry_unconfirmed'):
-                    raise TaskError('uncertain', '今天的签到仍待确认；可手动重新签到核验，或点击确认处理')
-                state = self.store.daily_state(self.store.account(account['id']))
-                self.store.clear_rejected_submission(account['id'], state.submitted_at)
-                self.log_job(job, '管理员主动重新核验待确认账号；先查询余额，本轮最多尝试签到三次')
+        if not continuation and submitted_today(state, account['result']['api_user'], time.time()):
+            resolved = current['checkin_status'] in ('signed', 'already_signed', 'manual_confirmed', 'no_credit')
+            if not resolved and not job.get('_retry_unconfirmed'):
+                observed = await self.service.validate(account['result'], route, settings)
+                now = time.time()
+                quota, used = observed.get('quota'), quota_of(observed.get('profile') or {}, 'used_quota')
+                gain = balance_credit(state.model_dump(), {'quota': quota, 'used_quota': used})
+                if fixed_reward(gain):
+                    job['_submission_at'] = state.submitted_at
+                    return {'code': 'signed', 'receipt_code': 'accepted', 'message': '只读复核已确认上次请求延迟到账 $25；本次未重复提交',
+                            'quota': quota, 'quota_before': state.quota, 'quota_after': quota,
+                            'used_before': state.used_quota, 'used_after': used, 'verified_gain': gain, 'reward_amount': 25,
+                            'observed_before': state.observed_at, 'observed_after': now, 'claimed_at': state.submitted_at, 'logs': []}
+                if state.quota is None:
+                    self.store.observe_account(account['id'], account['result']['api_user'], quota, used, at=now)
+                raise TaskError('uncertain', '上次请求结果仍不明；请手动重新核验。本次未提交，也未计为成功')
+            self.store.clear_rejected_submission(account['id'], state.submitted_at)
+            self.log_job(job, '已结束的签到记录不限制本轮领取；重新读取余额并请求网站核验')
         job['_checkin_started'] = True
         def precheck(profile, observed_at):
             if continuation:
@@ -500,14 +509,9 @@ class Engine:
         job.update(_checkin_submitted=True, _submission_at=at)
 
     def checkin_precheck(self, account, quota, used, now):
-        identity = account['result']['api_user']
-        state = self.store.observe_account(account['id'], identity, quota, used, at=now)
-        if not confirmed_today(state, identity, now):
-            return None
-        checked_at = datetime.fromtimestamp(state.confirmed_at, BEIJING).strftime('%Y-%m-%d %H:%M:%S')
-        return {'code': 'already_signed', 'message': '北京时间今日已有签到依据，仅刷新余额，未重复提交签到请求',
-                'quota': quota, 'quota_before': quota, 'quota_after': quota, 'used_before': used, 'used_after': used,
-                'logs': [f'今日签到依据：{checked_at}（Asia/Shanghai）；{state.evidence}；余额消费不会清除今日已签到记录']}
+        # Beijing dates group reports; they do not describe the site's eligibility cycle.
+        self.store.observe_account(account['id'], account['result']['api_user'], quota, used, at=now)
+        return None
 
     def resolve_checkin_receipt(self, account, result, settings):
         now = time.time()
@@ -520,36 +524,14 @@ class Engine:
             same_day = len({beijing_day(at) for at in (before_at, result.get('claimed_at', before_at), after_at, now)}) == 1
             if result['code'] == 'signed' and (not fixed_reward(gain) or not same_day):
                 result = {**result, 'code': 'uncertain', 'reward_amount': None,
-                          'message': '未通过北京时间当日签到前后余额核验，不能确认固定 $25 到账'}
+                          'message': '未通过本轮签到前后余额核验，不能确认固定 $25 到账'}
+            if result['code'] == 'already_signed':
+                result = {**result, 'code': 'no_credit' if gain == 0 else 'uncertain', 'reward_amount': None,
+                          'message': '网站提示已领取，但本轮没有核实到账；未计为成功'}
             self.store.observe_account(account['id'], identity, result.get('quota_before'), result.get('used_before'), at=before_at)
-            confirm = same_day and (result['code'] == 'signed' and fixed_reward(gain)
-                                   or result['code'] == 'already_signed' and result['receipt_code'] == 'already_signed')
             self.store.observe_account(account['id'], identity, result.get('quota_after'), result.get('used_after'), at=after_at,
-                                       confirm=confirm, evidence='balance_25' if result['code'] == 'signed' else 'receipt')
-        if (result['code'] != 'uncertain' or result.get('receipt_code') != 'accepted'
-                or beijing_day(result.get('claimed_at', now)) != beijing_day(now)):
-            return result
-        state = self.store.daily_state(self.store.account(account['id']))
-        if confirmed_today(state, identity, now):
-            return {**result, 'code': 'already_signed', 'message': '北京时间今日已观察到固定 $25 到账或明确签到回执，本轮不重复累计',
-                    'logs': [*result.get('logs', []), '复核独立每日签到依据；消费导致余额减少不影响今日已签到状态，清理日志也不清除该依据']}
-        gain = result.get('verified_gain')
-        if gain is None or gain > 0 or not account.get('last_extracted'):
-            return result
-        start = datetime.fromtimestamp(now, BEIJING).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        since = max(start, account['last_extracted'])
-        previous = self.store.all("SELECT * FROM checkins WHERE account_id=? AND code='signed' AND balance_source='live' AND created>=? AND created<=? ORDER BY created DESC,id DESC",
-                                  (account['id'], since, now))
-        for record in previous:
-            earned = balance_credit({'quota': record['quota_before'], 'used_quota': record['used_before']},
-                                   {'quota': record['quota_after'], 'used_quota': record['used_after']})
-            if earned is None or not fixed_reward(float(earned)):
-                continue
-            checked_at = datetime.fromtimestamp(record['created'], BEIJING).strftime('%Y-%m-%d %H:%M:%S')
-            message = '本轮未新增；今日已有确认到账记录，不重复计为签到成功'
-            evidence = f'复核到账记录：{checked_at}（Asia/Shanghai）签到新增 ${earned:.4f}；本轮接口空响应且未新增，记为已签过，不重复累计'
-            self.store.observe_account(account['id'], identity, result.get('quota_after'), result.get('used_after'), at=now, confirm=True, evidence='history')
-            return {**result, 'code': 'already_signed', 'message': message, 'logs': [*result.get('logs', []), evidence]}
+                                       confirm=result['code'] == 'signed' and same_day, evidence='balance_25')
+        # Never turn this attempt's missing credit into success using an earlier reward.
         return result
 
     async def refresh_for_checkin(self, job, account, password, route, settings, proxy_id):

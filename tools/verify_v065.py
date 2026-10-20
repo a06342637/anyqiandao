@@ -35,7 +35,7 @@ class ThreeAttemptTests(unittest.IsolatedAsyncioTestCase):
     async def test_three_zero_credits_stop_without_success(self):
         before = {'quota': 50000000, 'used_quota': 0}
         result = await self.run_checkin({'success': True}, before, [before], expected_posts=3)
-        self.assertEqual((result['code'], result['attempts']), ('uncertain', 3))
+        self.assertEqual((result['code'], result['attempts']), ('no_credit', 3))
         self.assertIsNone(result['reward_amount'])
         self.assertEqual(self.profiles, 12)
 
@@ -113,11 +113,11 @@ class ConfirmationTests(unittest.IsolatedAsyncioTestCase):
         identifier = account(self.store)
         self.assertEqual((await self.confirm(identifier)).status_code, 409)
 
-    async def test_confirmed_day_does_not_submit_again(self):
+    async def test_manual_confirmation_does_not_skip_later_website_request(self):
         identifier = self.pending()
         await self.confirm(identifier)
-        self.assertEqual((await self.perform(identifier))['status'], 'already_signed')
-        self.assertEqual(self.service.checkins, 0)
+        self.assertEqual((await self.perform(identifier))['status'], 'signed')
+        self.assertEqual(self.service.checkins, 1)
 
     async def test_manual_evidence_survives_backup_and_restart(self):
         identifier = self.pending()

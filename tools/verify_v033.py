@@ -298,9 +298,9 @@ class ReceiptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['code'], 'signed')
         self.assertEqual(self.profiles, 3)
 
-    async def test_explicit_already_signed_never_becomes_new_reward(self):
+    async def test_credit_is_measured_even_when_receipt_says_already(self):
         result = await self.run_checkin({'success': False, 'message': '今天已经签到'}, {'quota': 50000000}, [{'quota': 62500000}])
-        self.assertEqual(result['code'], 'already_signed')
+        self.assertEqual(result['code'], 'signed')
 
     async def test_explicit_success_requires_balance_verification(self):
         result = await self.run_checkin({'success': True, 'message': '签到成功，获得 $25 额度'}, {'quota': 50000000}, [TaskError('network_error', 'fixture read failure')])

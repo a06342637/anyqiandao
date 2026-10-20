@@ -6,7 +6,7 @@ from app.db import balance_view, checkin_earned
 
 
 def counters():
-    return {'signed': 0, 'already': 0, 'failed': 0, 'uncertain': 0, 'manual': 0, 'earned': Decimal(0)}
+    return {'signed': 0, 'already': 0, 'failed': 0, 'uncertain': 0, 'no_credit': 0, 'manual': 0, 'earned': Decimal(0)}
 
 
 def amount(value):
@@ -36,7 +36,7 @@ def checkin_statistics(store, span):
         earned = checkin_earned(row)
         measured = earned is not None
         gain = earned or Decimal(0)
-        field = {'signed': 'signed', 'already_signed': 'already', 'uncertain': 'uncertain', 'manual_confirmed': 'manual'}.get(row['code'], 'failed')
+        field = {'signed': 'signed', 'already_signed': 'already', 'uncertain': 'uncertain', 'no_credit': 'no_credit', 'manual_confirmed': 'manual'}.get(row['code'], 'failed')
         entry = per_account.setdefault(row['account_id'], counters())
         bucket = series[datetime.fromtimestamp(row['created'], zone).strftime('%Y-%m-%d')]
         for target in (totals, entry, bucket):

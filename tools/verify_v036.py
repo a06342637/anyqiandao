@@ -192,16 +192,16 @@ class CheckinPreflightTests(unittest.IsolatedAsyncioTestCase):
         self.engine.service = RouterService()
         self.engine.service.signed_in = signed_in
 
-    async def test_fresh_preflight_credit_skips_post_without_second_browser(self):
+    async def test_historical_credit_does_not_skip_current_request(self):
         identifier = account(self.store)
         self.store.observe_account(identifier, '42', 100, 10, at=time.time() - 2)
         profile = {'quota': 62500000, 'used_quota': 5000000}
         self.configure_router(profile, profile)
         with patch('app.router_service.asyncio.sleep', new=AsyncMock()):
             job = await self.perform(identifier)
-        self.assertEqual(job['status'], 'already_signed')
-        self.assertEqual(self.requests.count((CHECKIN_PATH, 'POST')), 0)
-        self.assertEqual(self.profiles, 1)
+        self.assertEqual(job['status'], 'no_credit')
+        self.assertEqual(self.requests.count((CHECKIN_PATH, 'POST')), 3)
+        self.assertEqual(self.profiles, 12)
         self.assertTrue(confirmed_today(self.store.daily_state(self.store.account(identifier)), '42', time.time()))
 
     async def test_non_25_transfer_does_not_skip_real_checkin(self):

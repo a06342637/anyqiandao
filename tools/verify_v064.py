@@ -26,7 +26,7 @@ class VerifiedReceiptTests(unittest.IsolatedAsyncioTestCase):
         result = await self.run_checkin({'success': True, 'message': '签到成功，获得 $25 额度'},
                                        {'quota': 50000000, 'used_quota': 1000000},
                                        [{'quota': 50000000, 'used_quota': 1000000}], expected_posts=3)
-        self.assertEqual(result['code'], 'uncertain')
+        self.assertEqual(result['code'], 'no_credit')
         self.assertIsNone(result['reward_amount'])
         self.assertEqual(self.profiles, 12)
 
@@ -58,13 +58,13 @@ class VerifiedReceiptTests(unittest.IsolatedAsyncioTestCase):
         result = await self.run_checkin({'success': True, 'message': '签到成功'},
                                        {'quota': 50000000, 'used_quota': 0},
                                        [{'quota': 37500000, 'used_quota': 12500000}], expected_posts=3)
-        self.assertEqual((result['code'], result['verified_gain']), ('uncertain', 0))
+        self.assertEqual((result['code'], result['verified_gain']), ('no_credit', 0))
 
     async def test_explicit_already_signed_does_not_count_new_reward(self):
         result = await self.run_checkin({'success': False, 'message': '今天已经签到'},
                                        {'quota': 50000000, 'used_quota': 0},
                                        [{'quota': 50000000, 'used_quota': 0}])
-        self.assertEqual(result['code'], 'already_signed')
+        self.assertEqual(result['code'], 'no_credit')
         self.assertIsNone(result['reward_amount'])
 
     async def test_missing_before_balance_never_sends_post(self):

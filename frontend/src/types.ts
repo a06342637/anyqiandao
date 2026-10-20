@@ -4,7 +4,7 @@ export interface CheckinBalance {
   created: number; balance_source: 'live' | 'legacy';
 }
 export interface DailyCheckin {
-  checkin_day: string; today_checkin: 'confirmed' | 'uncertain' | 'unconfirmed'; last_signed_at: number | null;
+  checkin_day: string; today_checkin: 'confirmed' | 'uncertain' | 'no_credit' | 'unconfirmed'; last_signed_at: number | null;
   manual_confirmation: boolean;
 }
 export interface Account extends DailyCheckin {
@@ -67,14 +67,14 @@ export interface LogEntry {
 }
 export interface ActionResult { queued: number; skipped?: number; filtered_count?: number; needs_password?: string[]; needs_password_count?: number; job_ids?: string[]; }
 export interface StatsAccount extends DailyCheckin {
-  account_id: string; username: string; note: string; quota: number | null; validity: string; signed: number; already: number; failed: number; uncertain: number;
+  account_id: string; username: string; note: string; quota: number | null; validity: string; signed: number; already: number; failed: number; uncertain: number; no_credit: number;
   earned: number; last: number | null; last_code: string | null; last_balance: CheckinBalance | null;
   manual: number;
 }
 export interface Stats {
   manual: number;
-  range: 'day' | 'week' | 'month'; since: number; until: number; timezone: string; attempts: number; signed: number; already: number; failed: number; uncertain: number; earned: number;
+  range: 'day' | 'week' | 'month'; since: number; until: number; timezone: string; attempts: number; signed: number; already: number; failed: number; uncertain: number; no_credit: number; earned: number;
   balance_total: number; balance_accounts: number; accounts_total: number; legacy_records: number; unmeasured: number;
-  series: { day: string; signed: number; already: number; failed: number; uncertain: number; earned: number }[]; accounts: StatsAccount[]; stats_retention_days: number;
+  series: { day: string; signed: number; already: number; failed: number; uncertain: number; no_credit: number; earned: number }[]; accounts: StatsAccount[]; stats_retention_days: number;
 }
 declare global { const __APP_VERSION__: string; }

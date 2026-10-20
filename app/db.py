@@ -337,9 +337,9 @@ class Store:
         now = time.time() if at is None else at
         state = self.daily_state(row)
         identity = state.api_user if state else ''
-        pending_result = (row['checkin_status'] == 'uncertain' and row['last_checkin'] is not None
+        pending_result = (row['checkin_status'] in ('uncertain', 'no_credit') and row['last_checkin'] is not None
                           and row['last_checkin'] <= now and beijing_day(row['last_checkin']) == beijing_day(now))
-        today_status = 'confirmed' if confirmed_today(state, identity, now) else 'uncertain' if submitted_today(state, identity, now) or pending_result else 'unconfirmed'
+        today_status = row['checkin_status'] if pending_result else 'confirmed' if confirmed_today(state, identity, now) else 'uncertain' if submitted_today(state, identity, now) else 'unconfirmed'
         return {'checkin_day': beijing_day(now), 'today_checkin': today_status,
                 'manual_confirmation': today_status == 'confirmed' and state.evidence == 'manual',
                 'last_signed_at': state.last_signed_at if state else None}
@@ -368,7 +368,7 @@ class Store:
             clauses.append('validity=?')
             values.append(selection.validity)
         if selection.needs_confirmation:
-            clauses.append("checkin_today_status(id,result_enc,checkin_state_enc,checkin_status,last_checkin)='uncertain'")
+            clauses.append("checkin_today_status(id,result_enc,checkin_state_enc,checkin_status,last_checkin) IN ('uncertain','no_credit')")
         if selection.only_extracted or exportable:
             clauses.append('result_enc IS NOT NULL')
         if exportable:

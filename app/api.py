@@ -77,16 +77,16 @@ def account_router(store, auth, engine):
             view = store.daily_view(row, at=now)
             if view['today_checkin'] == 'confirmed':
                 return {'ok': True, 'resolved': 0}
-            if view['today_checkin'] != 'uncertain' or not row['result_enc']:
+            if view['today_checkin'] not in ('uncertain', 'no_credit') or not row['result_enc']:
                 raise HTTPException(409, '该账号今天没有待确认签到')
             credentials = store.vault.open(row['result_enc'], f'result:{account_id}')
             state = store.daily_state(row)
             store.observe_account(account_id, credentials['api_user'], state.quota if state else None,
                                   state.used_quota if state else None, at=now, confirm=True, evidence='manual', connection=connection)
             start = datetime.fromtimestamp(now, BEIJING).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-            resolved = connection.execute("UPDATE checkins SET code='manual_confirmed',reward_amount=NULL WHERE account_id=? AND code='uncertain' AND created>=? AND created<=?",
+            resolved = connection.execute("UPDATE checkins SET code='manual_confirmed',reward_amount=NULL WHERE account_id=? AND code IN ('uncertain','no_credit') AND created>=? AND created<=?",
                                           (account_id, start, now)).rowcount
-            connection.execute("UPDATE jobs SET status='manual_confirmed',message='管理员已确认处理；未增加签到奖励' WHERE account_id=? AND kind='checkin' AND status='uncertain' AND finished>=? AND finished<=?",
+            connection.execute("UPDATE jobs SET status='manual_confirmed',message='管理员已确认处理；未增加签到奖励' WHERE account_id=? AND kind='checkin' AND status IN ('uncertain','no_credit') AND finished>=? AND finished<=?",
                                (account_id, start, now))
             connection.execute("UPDATE accounts SET checkin_status='manual_confirmed',message='今日待确认已由管理员确认处理；未增加签到奖励',updated=? WHERE id=?", (now, account_id))
         store.log('checkin', '管理员已确认处理今日待确认签到；保留原始余额和执行日志，不新增签到奖励', account_id=account_id)

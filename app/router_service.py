@@ -348,16 +348,16 @@ class RouterService:
                         observed_after = time.time()
                         gain = checkin_gain(before, after)
                     except TaskError:
-                        message = '再次签到前余额读取失败，停止重试并保留待确认'
+                        code, message = 'uncertain', '再次签到前余额读取失败，停止重试并保留待确认'
                         break
                     if not same_day():
-                        message = '签到核验跨越北京时间 00:00，停止重试并保留待确认'
+                        code, message = 'uncertain', '签到核验跨越北京时间 00:00，停止重试并保留待确认'
                         break
                     if fixed_reward(gain):
                         code, message = 'signed', '延迟到账已确认新增 $25.0000，停止继续签到'
                         break
                     if not zero_credit():
-                        message = '再次签到前余额或消耗无法确认净新增为零，停止重试'
+                        code, message = 'uncertain', '再次签到前余额或消耗无法确认净新增为零，停止重试'
                         break
                 baseline = after if attempt > 1 else before
                 logs.append(f'第 {attempt + attempt_offset}/3 次签到前余额 {currency}{quota_of(baseline):.4f}')
@@ -404,11 +404,11 @@ class RouterService:
                 if not same_day():
                     code, message = 'uncertain', '签到核验跨越北京时间 00:00，无法确定奖励归属日，保留待确认'
                     break
-                if receipt_code == 'already_signed':
-                    code, message = 'already_signed', '网站明确提示今天已签到，不重复计入奖励'
-                    break
                 if fixed_reward(gain):
                     code, message = 'signed', '签到成功，余额变化加回期间消耗后确认新增 $25.0000'
+                    break
+                if receipt_code == 'already_signed':
+                    code, message = ('no_credit' if after_read_ok and zero_credit() else 'uncertain'), '网站提示已领取，但本轮没有核实新增额度，不计为签到成功'
                     break
                 code, message = 'uncertain', '未确认固定 $25 到账，请人工核对后点击确认'
                 if after_read_ok and quota_of(after) is not None:
@@ -416,6 +416,7 @@ class RouterService:
                 if not after_read_ok or not zero_credit():
                     logs.append('余额或消耗读数不完整、发生其他金额变化或请求结果不明，停止继续签到')
                     break
+                code, message = 'no_credit', '本轮已核对余额与消耗，但网站没有发放额度；未到账，不计为签到成功，可在后续任务重试'
                 if attempt < attempt_limit:
                     logs.append('已核对本次未到账，将重新查余额后再次签到')
             quota_before, quota_after = quota_of(before), quota_of(after)
@@ -429,7 +430,7 @@ class RouterService:
             return {'code': code, 'message': message, 'quota': quota_after if quota_after is not None else quota_before,
                     'quota_before': quota_before, 'quota_after': quota_after, 'used_before': used_before, 'used_after': used_after,
                     'logs': logs, 'receipt_code': receipt_code, 'verified_gain': gain, 'attempts': submissions,
-                    'can_fallback': code == 'uncertain' and receipt_code == 'accepted' and after_read_ok and zero_credit() and same_day(),
+                    'can_fallback': code == 'no_credit' and receipt_code == 'accepted' and after_read_ok and zero_credit() and same_day(),
                     'reward_amount': 25.0 if code == 'signed' else None,
                     'observed_before': observed_before, 'observed_after': observed_after, 'claimed_at': claimed_at}
 

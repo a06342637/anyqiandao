@@ -110,7 +110,10 @@ def observe_balance(previous, api_user, quota, used_quota, now, *, confirm=False
                              last_signed_at=previous.last_signed_at if previous and (previous.last_signed_at or 0) <= now else None)
     if submitted_today(previous, identity, now):
         state.submitted_at = previous.submitted_at
-    if confirmed_today(previous, identity, now):
+    if confirm:
+        state.confirmed_at = state.last_signed_at = now
+        state.evidence = evidence
+    elif confirmed_today(previous, identity, now):
         state.confirmed_at, state.evidence = previous.confirmed_at, previous.evidence
     elif confirm or fixed_reward(gain):
         state.confirmed_at = now

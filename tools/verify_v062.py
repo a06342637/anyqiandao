@@ -94,7 +94,7 @@ class AuditFixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.one('SELECT status FROM jobs')['status'], 'uncertain')
         # A delayed reward is reconciled without another submission.
         self.service.validate = AsyncMock(return_value={'quota': 35, 'profile': {'used_quota': 0}})
-        self.assertEqual((await self.run_job('checkin', identifier))['status'], 'already_signed')
+        self.assertEqual((await self.run_job('checkin', identifier))['status'], 'signed')
         self.assertEqual(count, 1)
 
     async def test_migration_protects_legacy_uncertain_account(self):

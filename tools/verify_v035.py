@@ -124,16 +124,17 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.one('SELECT COUNT(*) AS count FROM checkins')['count'], 0)
         self.assertTrue(confirmed_today(self.store.daily_state(current), '42', time.time()))
 
-    async def test_confirmed_day_only_refreshes_and_does_not_submit_checkin(self):
+    async def test_confirmed_day_does_not_block_a_new_website_request(self):
         identifier = account(self.store)
         signed = self.seed_confirmation(identifier)
         self.service.validate = AsyncMock(return_value={'quota': 110, 'profile': {'used_quota': 12500000}})
+        self.service.result = self.receipt(code='signed', quota=150, quota_before=125, quota_after=150, verified_gain=25, reward_amount=25)
         job = await self.perform(identifier)
-        self.assertEqual(job['status'], 'already_signed')
-        self.assertIn('未重复提交', job['message'])
-        self.assertEqual(self.service.checkins, 0)
-        self.assertEqual(self.store.daily_state(self.store.account(identifier)).confirmed_at, signed.confirmed_at)
-        self.assertIsNone(self.store.checkin_balance(job_id=job['id'])['earned'])
+        self.assertEqual(job['status'], 'signed')
+        self.service.validate.assert_not_awaited()
+        self.assertEqual(self.service.checkins, 1)
+        self.assertGreater(self.store.daily_state(self.store.account(identifier)).confirmed_at, signed.confirmed_at)
+        self.assertIsNotNone(self.store.checkin_balance(job_id=job['id'])['earned'])
 
     async def test_evidence_survives_manual_history_delete_and_restart(self):
         identifier = account(self.store)
@@ -143,8 +144,8 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()['removed'], 1)
         reopened = Store(self.config.data_dir, Vault(self.config.key))
         self.assertTrue(confirmed_today(reopened.daily_state(reopened.account(identifier)), '42', time.time()))
-        self.assertEqual((await self.perform(identifier))['status'], 'already_signed')
-        self.assertEqual(self.service.checkins, 0)
+        self.assertEqual((await self.perform(identifier))['status'], 'signed')
+        self.assertEqual(self.service.checkins, 1)
 
     async def test_retention_does_not_remove_daily_evidence(self):
         identifier = account(self.store)
@@ -228,7 +229,7 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
         identifier = account(self.store)
         self.store.observe_account(identifier, '42', 100, 10, at=time.time() - 1)
         self.service.result = self.receipt()
-        self.assertEqual((await self.perform(identifier))['status'], 'already_signed')
+        self.assertEqual((await self.perform(identifier))['status'], 'uncertain')
         self.assertEqual((await self.client.get('/api/v1/stats')).json()['earned'], 0)
 
     async def test_today_evidence_survives_other_credit_during_receipt(self):
@@ -236,7 +237,7 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
         signed = self.seed_confirmation(identifier)
         result = self.engine.resolve_checkin_receipt(self.store.account(identifier),
                     self.receipt(verified_gain=100, quota_after=225, quota=225), self.store.settings())
-        self.assertEqual(result['code'], 'already_signed')
+        self.assertEqual(result['code'], 'uncertain')
         self.assertIsNone(result.get('reward_amount'))
         self.assertEqual(self.store.daily_state(self.store.account(identifier)).confirmed_at, signed.confirmed_at)
 
@@ -245,7 +246,7 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
         self.seed_confirmation(identifier)
         result = self.engine.resolve_checkin_receipt(self.store.account(identifier),
                     self.receipt(verified_gain=None, quota_after=None, used_after=None), self.store.settings())
-        self.assertEqual(result['code'], 'already_signed')
+        self.assertEqual(result['code'], 'uncertain')
         self.assertIsNone(result.get('reward_amount'))
 
     async def test_previous_day_receipt_does_not_borrow_today_confirmation(self):
@@ -267,7 +268,7 @@ class DailyApiTests(unittest.IsolatedAsyncioTestCase):
         self.store.execute('UPDATE checkins SET created=?', (now - 1800,))
         with patch('app.engine.time.time', return_value=now):
             result = self.engine.resolve_checkin_receipt(self.store.account(identifier), self.receipt(), self.store.settings())
-        self.assertEqual(result['code'], 'already_signed')
+        self.assertEqual(result['code'], 'uncertain')
 
     async def test_receipt_crossing_midnight_does_not_confirm_new_day(self):
         identifier = account(self.store)
