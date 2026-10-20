@@ -47,7 +47,7 @@ export function Button({ children, variant = 'secondary', busy, className = '', 
 }
 const labels: Record<string, string> = {
   valid: '有效', invalid: '已失效', unknown: '未检测', blocked: '需人工处理', pending: '等待中', running: '执行中',
-  manual_confirmed: '人工确认', success: '已完成', signed: '签到成功', already_signed: '历史已签 / 未新增', no_credit: '未到账', needs_manual: '需人工处理', cancelled: '已取消',
+  planned: '等待随机时刻', missed: '已错过窗口', queued: '已加入队列', manual_confirmed: '人工确认', success: '已完成', signed: '签到成功', already_signed: '历史已签 / 未新增', no_credit: '未到账', needs_manual: '需人工处理', cancelled: '已取消',
   network_error: '网络异常', proxy_error: '代理异常', login_error: '登录未完成', invalid_credentials: '账密有误', password_required: '需输入密码',
   script_error: '脚本异常', checkin_failed: '签到失败', uncertain: '结果待确认', upstream_error: '网站异常', error: '执行异常',
   healthy: '连通', unavailable: '不可用', needs_trust: '待确认指纹', host_key_required: '待确认指纹', browser_missing: '缺少浏览器',

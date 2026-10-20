@@ -21,11 +21,12 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 from playwright.async_api import async_playwright
 
 from app.config import TARGET_ORIGIN
+from app.providers import origin_for, ORIGINS, verified_reward
 from app.checkin_state import balance_credit, beijing_day, fixed_reward
 from app.console_data import read_console
 from app.errors import TaskError
 from app.proxy import allowed_destination
-from app.responses import checkin_result, is_waf_challenge, profile_result
+from app.responses import checkin_result, is_waf_challenge, profile_result, parse_response
 from app.vendor import anyrouter_checkin
 
 anyrouter_checkin.print = lambda *args, **kwargs: None
@@ -83,7 +84,9 @@ def translate(error, stage=''):
 
 
 class BrowserSession:
-    def __init__(self, route, settings):
+    def __init__(self, route, settings, provider='anyrouter'):
+        self.provider = provider
+        self.origin = origin_for(provider)
         self.route = route
         self.settings = settings
         self.manager = None
@@ -126,10 +129,14 @@ class BrowserSession:
             await request_route.abort()
         elif address.hostname and not allowed_destination(address.hostname):
             await request_route.abort()
-        elif address.hostname == urlsplit(TARGET_ORIGIN).hostname and address.path == CHECKIN_PATH:
+        elif any(address.hostname == urlsplit(value).hostname or (address.hostname or '').endswith('.' + urlsplit(value).hostname)
+                 for value in ORIGINS.values() if value != self.origin):
+            await request_route.abort()
+        elif address.hostname == urlsplit(self.origin).hostname and (address.path == CHECKIN_PATH or self.provider == 'agentrouter' and address.path == '/api/user/self'):
             headers = dict(request.headers)
             marker = headers.pop(REQUEST_MARKER, None)
-            if request.method != 'POST' or marker != self.request_marker:
+            expected = 'GET' if address.path == '/api/user/self' else 'POST'
+            if request.method != expected or marker != self.request_marker:
                 await request_route.abort()
             else:
                 await request_route.continue_(headers=headers)
@@ -170,7 +177,7 @@ class BrowserSession:
         # Navigation covers the whole page load through the proxy, so it gets the remaining login budget rather than the connect timeout.
         budget = max(5.0, min(deadline - time.monotonic(), self.settings.login_timeout))
         try:
-            await self.page.goto(TARGET_ORIGIN + path, wait_until='domcontentloaded', timeout=budget * 1000)
+            await self.page.goto(self.origin + path, wait_until='domcontentloaded', timeout=budget * 1000)
         except BrowserTimeout:
             if await self.challenge_visible():
                 raise TaskError('needs_manual', '网站要求人工验证，未更换代理') from None
@@ -225,9 +232,13 @@ class BrowserSession:
         return False
 
     async def api(self, path, *, method='GET', headers=None, body=None, timeout=30000, deadline=None):
+        if urlsplit(getattr(self.page, 'url', self.origin)).hostname != urlsplit(self.origin).hostname:
+            raise TaskError('invalid', '当前页面不属于该账号平台，已阻止发送凭证或请求')
         deadline = deadline or time.monotonic() + self.settings.login_timeout
         request_headers = dict(headers or {})
         if path == CHECKIN_PATH and method == 'POST':
+            request_headers[REQUEST_MARKER] = self.request_marker
+        if self.provider == 'agentrouter' and path == '/api/user/self':
             request_headers[REQUEST_MARKER] = self.request_marker
         payload = {'path': path, 'method': method, 'headers': request_headers, 'body': body, 'timeout': timeout}
         for attempt in range(4):
@@ -252,7 +263,7 @@ class BrowserSession:
         raise TaskError('upstream_error', '网站反复返回验证页面，本次未判定凭证失效；可更换代理', retry_proxy=True)
 
     async def cookies(self):
-        cookie_list = await self.context.cookies([TARGET_ORIGIN])
+        cookie_list = await self.context.cookies([self.origin])
         return {cookie['name']: cookie['value'] for cookie in cookie_list if cookie.get('value')}
 
 
@@ -286,8 +297,9 @@ class RouterService:
         if not credentials or not credentials.get('session') or not str(credentials.get('api_user', '')).isdigit():
             raise TaskError('invalid', '尚未获取凭证，请先提取')
         try:
-            async with BrowserSession(route, settings) as session:
-                await session.context.add_cookies([{'name': 'session', 'value': credentials['session'], 'domain': urlsplit(TARGET_ORIGIN).hostname,
+            provider = credentials.get('provider', 'anyrouter')
+            async with BrowserSession(route, settings, provider) as session:
+                await session.context.add_cookies([{'name': 'session', 'value': credentials['session'], 'domain': urlsplit(session.origin).hostname,
                                                     'path': '/', 'secure': True, 'httpOnly': True, 'sameSite': 'Lax'}])
                 deadline = time.monotonic() + settings.login_timeout
                 await session.open('/login', deadline)
@@ -308,6 +320,59 @@ class RouterService:
     async def insights(self, credentials, route, settings, options):
         async with self.signed_in(credentials, route, settings) as session:
             return await read_console(session, credentials, settings, options)
+
+    async def agent_login_checkin(self, username, password, route, settings, *, on_submit=None):
+        """AgentRouter uses a fresh login and GET /user/self, not AnyRouter's POST."""
+        async with BrowserSession(route, settings, 'agentrouter') as session:
+            await session.open('/login', time.monotonic() + settings.login_timeout)
+            if await session.challenge_visible():
+                raise TaskError('needs_manual', 'AgentRouter 要求人工验证，已停止登录')
+            if on_submit:
+                on_submit()
+            claimed_at = time.time()
+            status, text = await session.api('/api/user/login', method='POST', headers={'Content-Type': 'application/json'},
+                                             body=json.dumps({'username': username, 'password': password}))
+            login = parse_response(status, text)
+            if login.get('success') is not True:
+                message = str(login.get('message', ''))
+                code = 'needs_manual' if any(word in message.lower() for word in ('验证', 'captcha', 'turnstile', '频繁')) else 'invalid_credentials'
+                raise TaskError(code, 'AgentRouter 登录未通过，请检查账号密码或网站验证要求')
+            login_profile = profile_result(status, text, None)
+            cookies = await session.cookies()
+            if not cookies.get('session'):
+                raise TaskError('missing_session', 'AgentRouter 登录没有返回完整凭证')
+            credentials = {'provider': 'agentrouter', 'session': cookies['session'], 'api_user': str(login_profile['id'])}
+            async def profile():
+                code, body = await session.api('/api/user/self', headers=api_headers(credentials))
+                return profile_result(code, body, credentials['api_user'])
+            before = login_profile if quota_of(login_profile) is not None else await profile()
+            observed_before = time.time()
+            after, observed_after, gain = {}, observed_before, None
+            logs = ['AgentRouter：全新隔离会话登录，再查询用户信息触发网站自动签到；不调用 AnyRouter 签到接口']
+            for attempt in range(3):
+                try:
+                    after = await profile()
+                    observed_after = time.time()
+                    gain = checkin_gain(before, after)
+                except TaskError:
+                    logs.append('AgentRouter 最新余额读取失败，未把登录成功当成到账')
+                    break
+                if verified_reward('agentrouter', gain):
+                    break
+                if attempt < 2:
+                    await asyncio.sleep(1)
+            signed = verified_reward('agentrouter', gain)
+            code = 'signed' if signed else 'no_credit' if gain == 0 else 'uncertain'
+            message = f'AgentRouter 已核实本轮新增 ${gain:.4f}' if signed else 'AgentRouter 登录已完成，但本轮未核实新增额度，不计为签到成功'
+            quota_before, quota_after = quota_of(before), quota_of(after)
+            if quota_before is not None and quota_after is not None:
+                logs.append(f'登录查询前余额 {quota_before:.6f} → 查询后 {quota_after:.6f}；加回期间消耗后新增 {gain}')
+            result = {'code': code, 'message': message, 'quota': quota_after if quota_after is not None else quota_before,
+                      'quota_before': quota_before, 'quota_after': quota_after, 'used_before': quota_of(before, 'used_quota'),
+                      'used_after': quota_of(after, 'used_quota'), 'verified_gain': gain, 'reward_amount': gain if signed else None,
+                      'receipt_code': 'accepted', 'observed_before': observed_before, 'observed_after': observed_after,
+                      'claimed_at': claimed_at, 'logs': logs}
+            return credentials | {'quota': result['quota'], 'checkin_result': result}
 
     async def checkin(self, credentials, route, settings, *, before_submit=None, on_submit=None, attempt_limit=3, attempt_offset=0):
         if not 1 <= attempt_limit <= 3 or not 0 <= attempt_offset <= 2 or attempt_limit + attempt_offset > 3:

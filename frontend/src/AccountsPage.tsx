@@ -6,7 +6,7 @@ import CredentialImport from './CredentialImport';
 import DailyCheckinBadge from './DailyCheckinBadge';
 import AccountInsights, { type InsightView } from './AccountInsights';
 import { useSelection } from './selection';
-import type { Account, ActionResult, PageData } from './types';
+import type { Account, ActionResult, PageData, Provider } from './types';
 
 type AccountAction = 'validate' | 'balance' | 'checkin' | 'extract' | 'extract_invalid';
 
@@ -19,6 +19,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
   const [validity, setValidity] = useState('');
   const [onlyExtracted, setOnlyExtracted] = useState(false);
   const [needsConfirmation, setNeedsConfirmation] = useState(false);
+  const [provider, setProvider] = useState<Provider | ''>('');
   const [repairInvalid, setRepairInvalid] = useState(true);
   const [busy, setBusy] = useState(false);
   const [extracting, setExtracting] = useState<Account | null>(null);
@@ -31,19 +32,19 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
   const dragOrder = useRef<string[] | null>(null);
   const table = useRef<HTMLTableElement | null>(null);
   const pointer = useRef<{ id: number; x: number; y: number; moved: boolean } | null>(null);
-  const selection = useSelection({ validity: validity || undefined, only_extracted: onlyExtracted, needs_confirmation: needsConfirmation });
-  const { data, error, reload } = useResource<PageData<Account>>(`/accounts?page=${page}&limit=${limit}&validity=${validity}&only_extracted=${onlyExtracted}&needs_confirmation=${needsConfirmation}`);
+  const selection = useSelection({ validity: validity || undefined, only_extracted: onlyExtracted, needs_confirmation: needsConfirmation, provider: provider || undefined });
+  const { data, error, reload } = useResource<PageData<Account>>(`/accounts?page=${page}&limit=${limit}&validity=${validity}&only_extracted=${onlyExtracted}&needs_confirmation=${needsConfirmation}&provider=${provider}`);
   const total = data?.total || 0, count = selection.count(total);
   usePageClamp(page, data?.total, limit, setPage);
-  useEffect(() => { setOrder(null); setDragging(null); dragAccount.current = null; dragOrder.current = null; pointer.current = null; }, [page, limit, validity, onlyExtracted, needsConfirmation]);
+  useEffect(() => { setOrder(null); setDragging(null); dragAccount.current = null; dragOrder.current = null; pointer.current = null; }, [page, limit, validity, onlyExtracted, needsConfirmation, provider]);
   const items = order ? order.map(id => data?.items.find(item => item.id === id)).filter((item): item is Account => !!item) : data?.items || [];
   const checkedPage = !!items.length && items.every(account => selection.selected(account.id));
-  const canSort = !validity && !onlyExtracted && !needsConfirmation && !busy;
+  const canSort = !validity && !onlyExtracted && !needsConfirmation && !provider && !busy;
   const run = async (operation: () => Promise<void>) => { setBusy(true); try { await operation(); refreshData(); } catch (caught) { toast((caught as Error).message, 'error'); } finally { setBusy(false); } };
   const actionLabel = (kind: AccountAction) => ({ validate: repairInvalid ? '检测并修复' : '检测', balance: '检测余额', checkin: '签到', extract: '重新提取', extract_invalid: '仅重提失效' })[kind];
   const action = async (kind: AccountAction, account?: Account) => {
     const target = account ? `账号「${account.username}」` : `选中的 ${count} 个账号`;
-    if (kind === 'checkin' && !await confirm({ title: `为${target}签到一次？`, message: '每次先查询余额再签到，未到账最多尝试三次；待确认账号会重新核验。有账密的账号可自动重新提取。Session 导入账号只签到，失效后保留并等待手动更新，不执行自动登录。', confirmLabel: '开始签到' })) return;
+    if (kind === 'checkin' && !await confirm({ title: `为${target}签到一次？`, message: '按账号平台执行：AnyRouter 查询前后余额并提交签到，最多三次；AgentRouter 在新会话重新登录并查询用户信息。待确认账号会重新核验。有账密的账号可自动重新提取。Session 导入账号只签到，失效后保留并等待手动更新，不执行自动登录。', confirmLabel: '开始签到' })) return;
     if (kind === 'extract' && !account && count > 1 && !await confirm({ title: `重新提取所选 ${count} 个账号？`, message: '这会重新登录全部所选账号，包括凭证仍有效的账号。如果只需修复已失效 Cookie，请取消后选择“仅重提失效”。', confirmLabel: '全部重新提取' })) return;
     void run(async () => {
       const result = await api<ActionResult>('/accounts/actions', 'POST', { ...(account ? { ids: [account.id] } : selection.payload), action: kind, ...(kind === 'validate' ? { repair_invalid: repairInvalid } : {}), ...(kind === 'checkin' ? { retry_unconfirmed: true } : {}) });
@@ -148,12 +149,12 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
   };
 
   return <section className="panel accounts-panel"><div className="panel-heading"><div className="heading-icon"><Users size={19} /></div><div><h2>账号列表 <span className="count-pill">{data ? total : '—'}</span></h2><p>账号、密码与凭证均加密保存，直到你主动删除{canSort ? '；拖动左侧把手可排序' : ''}</p></div><div className="panel-tools"><RefreshButton onClick={reload} label="账号列表已刷新" /><Button onClick={onExtract}><Plus size={16} />添加账号</Button></div></div>
-    <div className="filter-bar"><Filter size={16} /><select aria-label="筛选账号状态" value={validity} onChange={event => { setValidity(event.target.value); setPage(1); selection.clear(); }}><option value="">全部状态</option><option value="valid">有效</option><option value="invalid">已失效</option><option value="unknown">未检测</option><option value="blocked">需人工处理</option><option value="network_error">网络异常</option></select><label className="check-label"><input type="checkbox" checked={onlyExtracted} onChange={event => { setOnlyExtracted(event.target.checked); setPage(1); selection.clear(); }} />只看已提取</label><label className="check-label"><input type="checkbox" checked={needsConfirmation} onChange={event => { setNeedsConfirmation(event.target.checked); setPage(1); selection.clear(); }} />只看待确认</label><Button variant="ghost" className="push-right" onClick={() => { setValidity('valid'); setOnlyExtracted(true); setNeedsConfirmation(false); setPage(1); selection.selectAll(); toast('已选择全部有效账号', 'success'); }}><CheckCheck size={16} />全选有效结果</Button></div>
+    <div className="filter-bar"><Filter size={16} /><select aria-label="筛选账号平台" value={provider} onChange={event => { setProvider(event.target.value as Provider | ''); setPage(1); selection.clear(); }}><option value="">全部平台</option><option value="anyrouter">AnyRouter</option><option value="agentrouter">AgentRouter</option></select><select aria-label="筛选账号状态" value={validity} onChange={event => { setValidity(event.target.value); setPage(1); selection.clear(); }}><option value="">全部状态</option><option value="valid">有效</option><option value="invalid">已失效</option><option value="unknown">未检测</option><option value="blocked">需人工处理</option><option value="network_error">网络异常</option></select><label className="check-label"><input type="checkbox" checked={onlyExtracted} onChange={event => { setOnlyExtracted(event.target.checked); setPage(1); selection.clear(); }} />只看已提取</label><label className="check-label"><input type="checkbox" checked={needsConfirmation} onChange={event => { setNeedsConfirmation(event.target.checked); setPage(1); selection.clear(); }} />只看待确认</label><Button variant="ghost" className="push-right" onClick={() => { setValidity('valid'); setOnlyExtracted(true); setNeedsConfirmation(false); setPage(1); selection.selectAll(); toast('已选择全部有效账号', 'success'); }}><CheckCheck size={16} />全选有效结果</Button></div>
     <div className={`selection-bar account-selection ${count ? 'has-selection' : ''}`}>
       <div className="selection-summary"><label className="check-label account-mobile-select"><input type="checkbox" aria-label="选择本页账号（卡片）" checked={checkedPage} onChange={event => items.forEach(account => selection.toggle(account.id, event.target.checked))} />本页</label><span>已选 <strong>{count}</strong> 个{selection.all ? ' · 跨页全选' : ' · 跨页保留选择'}</span><button className="text-button" onClick={selection.selectAll}>全选当前筛选</button>{count > 0 && <button className="text-button" onClick={selection.clear}>清空选择</button>}</div>
-      <label className="check-label repair-option" title="只对保存了登录密码的账号自动重提；Session 导入账号失效时等待人工更新。检测不会顺带签到。"><input type="checkbox" checked={repairInvalid} onChange={event => setRepairInvalid(event.target.checked)} />账密账号失效时自动重提</label>
+      <label className="check-label repair-option" title="只对保存了登录密码的账号自动重提；Session 导入账号失效时等待人工更新。AnyRouter 检测不会签到；AgentRouter 查询可能触发网站自动发放。"><input type="checkbox" checked={repairInvalid} onChange={event => setRepairInvalid(event.target.checked)} />账密账号失效时自动重提</label>
       <div className="selection-actions">
-        <Button disabled={!count || busy} onClick={() => void action('balance')} title="批量读取所选账号的最新余额；使用代理池中的“检测余额”线路，不自动登录或签到"><Coins size={15} />检测余额</Button>
+        <Button disabled={!count || busy} onClick={() => void action('balance')} title="批量读取所选账号的最新余额；使用代理池中的“检测余额”线路，不自动登录；AgentRouter 查询可能触发网站自动发放"><Coins size={15} />检测余额</Button>
         <Button disabled={!count || busy} onClick={() => void action('validate')}><ShieldCheck size={15} />{repairInvalid ? '检测并修复' : '检测有效性'}</Button>
         <Button disabled={!count || busy} onClick={() => void action('extract_invalid')} title="只处理所选账号中已标记失效的 Cookie，其他账号保持不变"><RefreshCw size={15} />仅重提失效</Button>
         <Button disabled={!count || busy} onClick={() => void action('extract')} title="重新登录全部所选账号，包括凭证有效的账号">全部重提</Button>
@@ -167,7 +168,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
       <thead><tr><th className="check-cell serial-cell"><span>序号</span><input type="checkbox" aria-label="选择本页账号" checked={checkedPage} onChange={event => items.forEach(account => selection.toggle(account.id, event.target.checked))} /></th><th>账号</th><th>凭证与时间</th><th>余额</th><th>账号操作</th></tr></thead>
       <tbody>{items.map((account, index) => <tr key={account.id} data-account-id={account.id} className={`${selection.selected(account.id) ? 'selected-row' : ''} ${dragging === account.id ? 'dragging' : ''}`}>
         <td className="check-cell serial-cell"><span className="account-number" aria-label={`序号 ${(page - 1) * limit + index + 1}`}>{(page - 1) * limit + index + 1}</span><div className="row-selection-controls"><input type="checkbox" aria-label={`选择 ${account.username}`} checked={selection.selected(account.id)} onChange={event => selection.toggle(account.id, event.target.checked)} /><button type="button" className="drag-handle" aria-label={`排序 ${account.username}`} title="拖动排序，也可聚焦后按 Alt + ↑ / ↓；Esc 取消" disabled={!canSort} onPointerDown={startDrag(account.id)} onKeyDown={keyboardSort(account.id)}><GripVertical size={16} /></button></div></td>
-        <td className="account-identity"><strong>{account.username}</strong><span className={`credential-source ${account.has_password ? 'automatic' : 'manual'}`}>{account.has_password ? '账密账号 · 自动续签' : account.has_result ? 'Session 导入 · 仅签到' : '待补充凭证'}</span>{account.note && <span className="account-note" title={account.note}>{account.note}</span>}
+        <td className="account-identity"><strong>{account.username}</strong><small className="small-label">{account.provider === 'agentrouter' ? 'AgentRouter' : 'AnyRouter'}</small><span className={`credential-source ${account.has_password ? 'automatic' : 'manual'}`}>{account.has_password ? '账密账号 · 自动续签' : account.has_result ? 'Session 导入 · 仅签到' : '待补充凭证'}</span>{account.note && <span className="account-note" title={account.note}>{account.note}</span>}
           <details className="account-copy-menu"><summary><Copy size={13} />复制账号与凭证</summary><div className="account-copy-tools">
             <div className="account-copy-group" aria-label={`${account.username} 的登录信息`}><span>账密</span><button className="mini-copy" disabled={busy} onClick={() => copyLogin(account, 'username')} title="复制账号">账号</button><button className="mini-copy" disabled={busy || !account.has_password} onClick={() => copyLogin(account, 'password')} title="复制密码">密码</button><button className="mini-copy" disabled={busy || !account.has_password} onClick={() => copyLogin(account, 'both')} title="复制为 账号----密码">账号----密码</button></div>
             <div className="account-copy-group" aria-label={`${account.username} 的 Cookie 凭证`}><span>凭证</span><button className="mini-copy" disabled={!canCopy(account)} onClick={() => copyAccount(account, 'session')} title="复制 session Cookie">session</button><button className="mini-copy" disabled={!canCopy(account)} onClick={() => copyAccount(account, 'api_user')} title="复制 api_user">api_user</button><button className="mini-copy" disabled={!canCopy(account)} onClick={() => copyAccount(account, 'config')} title="复制 GitHub 签到配置（单行 JSON 数组）">GitHub 配置</button></div>
@@ -182,7 +183,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
         <td className="account-operations-cell"><div className="account-action-grid">
           <Button aria-label={`检测 ${account.username}`} disabled={busy || (!account.has_result && !(repairInvalid && account.has_password))} onClick={() => void action('validate', account)}><ShieldCheck size={13} />检测</Button>
           <Button aria-label={`签到 ${account.username}`} disabled={busy || (!account.has_result && !account.has_password)} onClick={() => void action('checkin', account)}><Play size={13} />签到</Button>
-          <Button aria-label={`${account.has_password || !account.has_result ? '重新提取' : '更新凭证'} ${account.username}`} disabled={busy} onClick={() => account.has_password || !account.has_result ? setExtracting(account) : setCredentialAccount(account)}><RefreshCw size={13} />{account.has_password || !account.has_result ? '重新提取' : '更新凭证'}</Button>
+          <Button aria-label={`${account.has_password || account.provider === 'agentrouter' || !account.has_result ? '重新提取' : '更新凭证'} ${account.username}`} disabled={busy} onClick={() => account.has_password || account.provider === 'agentrouter' || !account.has_result ? setExtracting(account) : setCredentialAccount(account)}><RefreshCw size={13} />{account.has_password || account.provider === 'agentrouter' || !account.has_result ? '重新提取' : '更新凭证'}</Button>
           <Button aria-label={`编辑 ${account.username}`} disabled={busy} onClick={() => setEditing(account)}><Pencil size={13} />编辑</Button>
           <Button aria-label={`数据看板 ${account.username}`} disabled={busy || !account.has_result} onClick={() => setInsights({ account, view: 'dashboard' })}><BarChart3 size={13} />数据看板</Button>
           <Button aria-label={`API 令牌 ${account.username}`} disabled={busy || !account.has_result} onClick={() => setInsights({ account, view: 'tokens' })}><KeyRound size={13} />API 令牌</Button>
@@ -190,7 +191,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
         </div></td>
       </tr>)}</tbody>
     </table></div>}
-    {data && <Pagination page={page} total={total} limit={limit} onChange={setPage} onLimitChange={setLimit} />}<div className="panel-footnote"><ShieldCheck size={14} />账密账号可自动修复失效凭证；Session 导入账号只签到，失效后等待手动更新。看板与令牌均按需只读加载，不会触发签到。</div>
+    {data && <Pagination page={page} total={total} limit={limit} onChange={setPage} onLimitChange={setLimit} />}<div className="panel-footnote"><ShieldCheck size={14} />账密账号可自动修复失效凭证；Session 导入账号只签到，失效后等待手动更新。看板与令牌按需加载；AgentRouter 查询用户信息可能触发网站自动发放额度。</div>
     {extracting && <Reextract account={extracting} onClose={() => setExtracting(null)} />}
     {editing && <EditAccount account={editing} onClose={() => setEditing(null)} />}
     {credentialAccount && <Modal title="更新 Session 凭证" subtitle="仅更新当前账号的 session 与 api_user，不需要登录密码。" onClose={() => setCredentialAccount(null)}><CredentialImport account={credentialAccount} onDone={() => setCredentialAccount(null)} /></Modal>}

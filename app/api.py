@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from app.config import VERSION
 from app.db import SCHEMA_VERSION
 from app.checkin_state import BEIJING, beijing_day
+from app.providers import account_fingerprint
 from app.schemas import AccountEdit, ActionInput, CheckinConfirmationInput, ImportInput, QueueSettings, Reorder, RuntimeSettings, Selection
 from app.statistics import checkin_statistics
 
@@ -52,9 +53,9 @@ def account_router(store, auth, engine):
 
     @router.get('/accounts')
     def accounts(page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=100),
-                 validity: str | None = None, only_extracted: bool = False, needs_confirmation: bool = False):
+                 validity: str | None = None, only_extracted: bool = False, needs_confirmation: bool = False, provider: str | None = None):
         try:
-            selection = Selection(all_matching=True, validity=validity or None, only_extracted=only_extracted, needs_confirmation=needs_confirmation)
+            selection = Selection(all_matching=True, validity=validity or None, only_extracted=only_extracted, needs_confirmation=needs_confirmation, provider=provider or None)
         except ValueError:
             raise HTTPException(400, '账号状态筛选无效') from None
         where, values = store.selection_where(selection)
@@ -106,7 +107,7 @@ def account_router(store, auth, engine):
                     account_ids.append(existing_job['account_id'])
                     job_ids.append(existing_job['id'])
                     continue
-                fingerprint = store.vault.fingerprint(item.username)
+                fingerprint = account_fingerprint(store.vault, item.username, item.provider)
                 existing = connection.execute('SELECT id FROM accounts WHERE login_hash=?', (fingerprint,)).fetchone()
                 if existing:
                     skipped += 1
@@ -116,8 +117,8 @@ def account_router(store, auth, engine):
                 account_id = uuid.uuid4().hex
                 login_enc = store.vault.seal({'username': item.username, 'password': item.password}, f'login:{account_id}')
                 now = time.time()
-                connection.execute('INSERT INTO accounts(id,login_hash,login_enc,created,updated,position) VALUES (?,?,?,?,?,(SELECT COALESCE(MAX(position),0)+1 FROM accounts))',
-                                   (account_id, fingerprint, login_enc, now, now))
+                connection.execute('INSERT INTO accounts(id,login_hash,login_enc,created,updated,provider,position) VALUES (?,?,?,?,?,?,(SELECT COALESCE(MAX(position),0)+1 FROM accounts))',
+                                   (account_id, fingerprint, login_enc, now, now, item.provider))
                 job_id, inserted = store.enqueue('extract', account_id, source='import', payload={'password': item.password},
                                             dedupe_key=dedupe, connection=connection)
                 queued += int(inserted)
@@ -185,7 +186,7 @@ def account_router(store, auth, engine):
                 raise HTTPException(400, '账号不能为空')
             if payload.username is not None and payload.username.strip() and payload.username.strip() != login['username']:
                 username = payload.username.strip()
-                fingerprint = store.vault.fingerprint(username)
+                fingerprint = account_fingerprint(store.vault, username, row['provider'])
                 if connection.execute('SELECT 1 FROM accounts WHERE login_hash=? AND id!=?', (fingerprint, account_id)).fetchone():
                     raise HTTPException(409, '已存在相同账号')
                 login['username'] = username
@@ -259,12 +260,14 @@ def account_router(store, auth, engine):
         async def generate():
             with store.connection() as connection:
                 connection.execute('BEGIN')
-                iterator = store.iter_selected(connection, selection, columns='id,result_enc', exportable=True)
+                iterator = store.iter_selected(connection, selection, columns='id,result_enc,provider', exportable=True)
                 separator = ''
                 yield '['
                 for row in iterator:
                     result = store.vault.open(row['result_enc'], f'result:{row["id"]}')
                     item = {'cookies': {'session': result['session']}, 'api_user': str(result['api_user'])}
+                    if row['provider'] != 'anyrouter':
+                        item['provider'] = row['provider']
                     yield separator + json.dumps(item, ensure_ascii=False, separators=(',', ':'))
                     separator = ','
                 yield ']'

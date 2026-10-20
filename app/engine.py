@@ -6,6 +6,8 @@ import time
 import httpx
 
 from app.config import TARGET_ORIGIN
+from app.providers import verified_reward
+from app.random_schedule import dispatch_window, plan_window
 from app.checkin_state import balance_credit, beijing_day, submitted_today, fixed_reward
 from app.errors import HostKeyRequired, TaskError
 from app.proxy import ProxyBridge, detect_protocol
@@ -89,6 +91,7 @@ class Engine:
 
     def claim(self):
         with self.store.transaction() as connection:
+            connection.execute("UPDATE jobs SET status='cancelled',message='随机签到窗口已结束，未执行，不补发',payload_enc=NULL,finished=? WHERE status='pending' AND not_after IS NOT NULL AND not_after<=?", (time.time(), time.time()))
             maintenance = connection.execute("SELECT value FROM meta WHERE key='maintenance'").fetchone()
             if maintenance and maintenance['value'] == '1':
                 return None
@@ -323,11 +326,18 @@ class Engine:
         if not settings.auto_checkin and job['source'] != 'auto:reextract':
             return
         joined = False
+        random_plan = False
+        inserted = False
         with self.store.transaction() as connection:
             if settings.auto_checkin:
                 schedule_id = self.store.auto_schedule(connection, settings.auto_checkin_interval_minutes)
                 joined = connection.execute('INSERT OR IGNORE INTO schedule_accounts VALUES (?,?)', (schedule_id, account['id'])).rowcount
-            _, inserted = self.store.enqueue('checkin', account['id'], source='auto:extract', connection=connection)
+                schedule = connection.execute('SELECT * FROM schedules WHERE id=?', (schedule_id,)).fetchone()
+                if schedule['mode'] == 'random_window':
+                    plan_window(connection, schedule, time.time())
+                    random_plan = True
+            if not random_plan:
+                _, inserted = self.store.enqueue('checkin', account['id'], source='auto:extract', connection=connection)
         if joined:
             self.store.log('extract', '已自动加入默认签到计划', job_id=job['id'], account_id=account['id'])
         if inserted:
@@ -374,6 +384,9 @@ class Engine:
             self.finish(job, 'proxy_error', '代理不可用、认证失败或连接超时')
 
     async def perform(self, job, account, password, route, settings, proxy_id):
+        if account.get('provider') == 'agentrouter' and job['kind'] in ('extract', 'checkin'):
+            await self.perform_agentrouter(job, account, password, settings)
+            return
         if job['kind'] == 'insights':
             operation = 'tokens' if job['_insight_options']['view'] == 'tokens' else 'dashboard'
             result, proxy_id = await self.routed(job, account, operation, settings, lambda active_route: self.service.insights(account['result'], active_route, settings, job['_insight_options']))
@@ -388,7 +401,8 @@ class Engine:
                 connection.execute('DELETE FROM console_results WHERE expires<?', (now,))
                 connection.execute('INSERT OR REPLACE INTO console_results VALUES (?,?,?,?,?)',
                                    (job['id'], account['id'], self.store.vault.seal(result, f'console:{job["id"]}'), hashlib.sha256(account['result_enc'].encode()).hexdigest(), now + 600))
-                connection.execute("UPDATE jobs SET status='success',message=?,payload_enc=NULL,finished=? WHERE id=?", (f'{label}已读取；只读查询，未登录、未签到、未修改令牌', now, job['id']))
+                notice = 'AgentRouter 查询可能触发网站自动发放；未修改令牌' if account.get('provider') == 'agentrouter' else '只读查询，未登录、未签到、未修改令牌'
+                connection.execute("UPDATE jobs SET status='success',message=?,payload_enc=NULL,finished=? WHERE id=?", (f'{label}已读取；{notice}', now, job['id']))
             self.log_job(job, f'{label}查询完成，结果加密暂存 10 分钟；日志不包含令牌或 Cookie')
         elif job['kind'] == 'extract':
             result, proxy_id = await self.routed(job, account, job.get('_route_operation', 'extract'), settings, lambda active_route: self.service.extract(account['login']['username'], password, active_route, settings))
@@ -426,7 +440,7 @@ class Engine:
             now = time.time()
             message = '失效凭证已自动重新提取并验证有效' if refreshed else '凭证有效'
             self.complete_account(job, "UPDATE accounts SET validity='valid',message=?,last_validated=?,quota=COALESCE(?,quota),proxy_id=?,updated=? WHERE id=?",
-                (message, now, result.get('quota'), proxy_id, now, account['id']), 'success', f'检测完成：{message}；未触发签到')
+                (message, now, result.get('quota'), proxy_id, now, account['id']), 'success', f'检测完成：{message}；' + ('AgentRouter 查询可能触发网站自动发放' if account.get('provider') == 'agentrouter' else '未触发签到'))
             if result.get('quota') is not None:
                 self.store.observe_account(account['id'], account['result']['api_user'], result['quota'], quota_of(result.get('profile') or {}, 'used_quota'), at=now)
         elif job['kind'] == 'checkin':
@@ -522,17 +536,68 @@ class Engine:
             gain = balance_credit({'quota': result.get('quota_before'), 'used_quota': result.get('used_before')},
                                   {'quota': result.get('quota_after'), 'used_quota': result.get('used_after')})
             same_day = len({beijing_day(at) for at in (before_at, result.get('claimed_at', before_at), after_at, now)}) == 1
-            if result['code'] == 'signed' and (not fixed_reward(gain) or not same_day):
+            if result['code'] == 'signed' and (not verified_reward(account.get('provider', 'anyrouter'), gain) or not same_day):
                 result = {**result, 'code': 'uncertain', 'reward_amount': None,
-                          'message': '未通过本轮签到前后余额核验，不能确认固定 $25 到账'}
+                          'message': '未通过本轮签到前后余额核验，不能确认该平台奖励到账'}
             if result['code'] == 'already_signed':
                 result = {**result, 'code': 'no_credit' if gain == 0 else 'uncertain', 'reward_amount': None,
                           'message': '网站提示已领取，但本轮没有核实到账；未计为成功'}
             self.store.observe_account(account['id'], identity, result.get('quota_before'), result.get('used_before'), at=before_at)
             self.store.observe_account(account['id'], identity, result.get('quota_after'), result.get('used_after'), at=after_at,
-                                       confirm=result['code'] == 'signed' and same_day, evidence='balance_25')
+                                       confirm=result['code'] == 'signed' and same_day,
+                                       evidence='balance_credit' if account.get('provider') == 'agentrouter' else 'balance_25')
         # Never turn this attempt's missing credit into success using an earlier reward.
         return result
+
+    async def perform_agentrouter(self, job, account, password, settings):
+        if not password:
+            raise TaskError('password_required', 'AgentRouter 需要保存账号密码，以全新会话重新登录签到')
+        state = self.store.daily_state(account)
+        if (job['kind'] == 'checkin' and not state and account['checkin_status'] == 'uncertain'
+                and account['last_checkin'] and beijing_day(account['last_checkin']) == beijing_day(time.time())
+                and not job.get('_retry_unconfirmed')):
+            raise TaskError('uncertain', 'AgentRouter 上次首次登录结果不明，请手动重新核验')
+        if state and submitted_today(state, state.api_user, time.time()):
+            if account['checkin_status'] == 'uncertain' and not job.get('_retry_unconfirmed'):
+                raise TaskError('uncertain', 'AgentRouter 上次登录领取结果不明，请手动重新核验')
+            self.store.clear_rejected_submission(account['id'], state.submitted_at)
+        def submitted():
+            if job.get('_checkin_submitted'):
+                return
+            if account['result']:
+                self.mark_submitted(job, account)
+            else:
+                job['_checkin_submitted'] = True
+        operation = 'checkin' if job['kind'] == 'checkin' else job.get('_route_operation', 'extract')
+        self.log_job(job, 'AgentRouter 使用保存的账号密码在新会话登录，查询用户信息触发自动签到')
+        credentials, proxy_id = await self.routed(job, account, operation, settings,
+            lambda active_route: self.service.agent_login_checkin(account['login']['username'], password, active_route, settings, on_submit=submitted))
+        result = credentials.pop('checkin_result')
+        now = time.time()
+        self.store.execute("UPDATE accounts SET result_enc=?,validity='valid',last_extracted=?,last_validated=?,quota=COALESCE(?,quota),updated=? WHERE id=?",
+            (self.store.vault.seal(credentials, f'result:{account["id"]}'), now, now, credentials.get('quota'), now, account['id']))
+        account.update(result=credentials)
+        result = self.resolve_checkin_receipt(account, result, settings)
+        if result['code'] in ('signed', 'no_credit') and job.get('_submission_at'):
+            self.store.clear_rejected_submission(account['id'], job['_submission_at'])
+        status = 'success' if job['kind'] == 'extract' else result['code']
+        message = ('AgentRouter 凭证提取完成；' if job['kind'] == 'extract' else '') + result['message']
+        self.complete_account(job, "UPDATE accounts SET message=?,last_checkin=?,checkin_status=?,quota=COALESCE(?,quota),proxy_id=?,updated=? WHERE id=?",
+            (result['message'], now, result['code'], result.get('quota'), proxy_id, now, account['id']), status, message,
+            balance=(result.get('quota_before'), result.get('quota_after')), usage=(result.get('used_before'), result.get('used_after')),
+            reward_amount=result.get('reward_amount'), record_code=result['code'])
+        # Credential extraction can itself trigger AgentRouter's reward. Preserve
+        # its actual outcome in statistics instead of recording generic success.
+        if job['kind'] == 'extract':
+            if settings.auto_checkin:
+                with self.store.transaction() as connection:
+                    schedule = self.store.auto_schedule(connection, settings.auto_checkin_interval_minutes)
+                    connection.execute('INSERT OR IGNORE INTO schedule_accounts VALUES (?,?)', (schedule, account['id']))
+                    schedule_row = connection.execute('SELECT * FROM schedules WHERE id=?', (schedule,)).fetchone()
+                    if schedule_row['mode'] == 'random_window':
+                        plan_window(connection, schedule_row, time.time())
+        for line in result.get('logs', []):
+            self.log_job(job, line, kind='script')
 
     async def refresh_for_checkin(self, job, account, password, route, settings, proxy_id):
         await self.refresh_credentials(job, account, password, route, settings, proxy_id)
@@ -553,20 +618,33 @@ class Engine:
                            (f'Cookie 已失效，正在自动重新提取，随后继续本次{operation}', job['id']))
         job['_credential_refresh_attempted'] = True
         self.log_job(job, f'开始自动重新提取凭证，本次{operation}最多进行一轮自动凭证修复', kind='extract', category='invalid')
-        credentials, proxy_id = await self.routed(job, account, 'refresh', settings, lambda active_route: self.service.extract(account['login']['username'], password, active_route, settings))
+        agent_result = None
+        if account.get('provider') == 'agentrouter':
+            credentials, proxy_id = await self.routed(job, account, 'refresh', settings,
+                lambda active_route: self.service.agent_login_checkin(account['login']['username'], password, active_route, settings,
+                    on_submit=lambda: job.update(_checkin_submitted=True)))
+            agent_result = credentials.pop('checkin_result')
+        else:
+            credentials, proxy_id = await self.routed(job, account, 'refresh', settings, lambda active_route: self.service.extract(account['login']['username'], password, active_route, settings))
         if not credentials.get('session') or not str(credentials.get('api_user', '')).isdigit():
             raise TaskError('missing_session', '自动重新提取未获得完整凭证，未提交签到')
         now = time.time()
         self.store.execute("UPDATE accounts SET result_enc=?,validity='valid',message='自动重新提取成功',last_extracted=?,last_validated=?,quota=?,proxy_id=?,updated=? WHERE id=?",
                            (self.store.vault.seal(credentials, f'result:{account["id"]}'), now, now, credentials.get('quota'), proxy_id, now, account['id']))
         account.update(result=credentials, validity='valid', last_extracted=now)
+        if agent_result:
+            result = self.resolve_checkin_receipt(account, agent_result, settings)
+            self.store.record_checkin(account['id'], job['id'], result['code'], result.get('quota_before'), result.get('quota_after'),
+                                      used_before=result.get('used_before'), used_after=result.get('used_after'), reward_amount=result.get('reward_amount'))
+            self.store.execute('UPDATE accounts SET last_checkin=?,checkin_status=? WHERE id=?', (now, result['code'], account['id']))
+            self.log_job(job, result['message'], kind='script')
         self.log_job(job, f'自动重新提取成功，继续执行原{operation}任务', kind='extract', category='invalid')
 
-    def complete_account(self, job, query, values, status, message, balance=None, usage=(None, None), reward_amount=None):
+    def complete_account(self, job, query, values, status, message, balance=None, usage=(None, None), reward_amount=None, record_code=None):
         with self.store.transaction() as connection:
             connection.execute(query, values)
             if balance is not None:
-                self.store.record_checkin(job['account_id'], job['id'], status, *balance, connection=connection,
+                self.store.record_checkin(job['account_id'], job['id'], record_code or status, *balance, connection=connection,
                                           used_before=usage[0], used_after=usage[1], reward_amount=reward_amount)
             connection.execute('UPDATE jobs SET status=?,message=?,payload_enc=NULL,finished=? WHERE id=?',
                                (status, message, time.time(), job['id']))
@@ -579,6 +657,9 @@ class Engine:
         with self.store.transaction() as connection:
             due = connection.execute('SELECT * FROM schedules WHERE enabled=1 AND next_run<=? ORDER BY next_run', (now,)).fetchall()
             for schedule in due:
+                if schedule['mode'] == 'random_window':
+                    dispatch_window(self.store, connection, schedule, now)
+                    continue
                 interval = schedule['interval_minutes'] * 60
                 next_run = schedule['next_run'] + (int((now - schedule['next_run']) // interval) + 1) * interval
                 accounts = connection.execute("SELECT account_id,validity,login_enc FROM schedule_accounts JOIN accounts ON accounts.id=account_id WHERE schedule_id=?", (schedule['id'],)).fetchall()

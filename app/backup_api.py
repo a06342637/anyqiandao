@@ -19,6 +19,8 @@ from app.checkin_state import DailyCheckinState, merge_daily_state, valid_observ
 from app.config import VERSION
 from app.db import SCHEMA_VERSION
 from app.schemas import RuntimeSettings
+from app.providers import account_fingerprint
+from app.random_schedule import plan_window
 from app.backup_encryption import MAGIC
 
 FORMAT = 1
@@ -36,24 +38,30 @@ def backup_document(store):
             login = store.vault.open(row['login_enc'], f'login:{row["id"]}')
             result = store.vault.open(row['result_enc'], f'result:{row["id"]}') if row['result_enc'] else None
             daily = store.daily_state(row)
-            accounts.append({'username': login['username'], 'password': login.get('password'), 'note': row['note'], 'result': result,
+            accounts.append({'username': login['username'], 'provider': row['provider'], 'password': login.get('password'), 'note': row['note'], 'result': result,
                              'validity': row['validity'], 'message': row['message'], 'quota': row['quota'], 'checkin_status': row['checkin_status'],
                              'last_validated': row['last_validated'], 'last_extracted': row['last_extracted'], 'last_checkin': row['last_checkin'],
                              'created': row['created'], 'updated': row['updated'], 'daily_checkin': daily.model_dump() if daily else None,
                              'checkin_route': json.loads(row['checkin_route'])})
         usernames = {row['id']: account['username'] for row, account in zip(read('SELECT id FROM accounts ORDER BY position,created,rowid'), accounts)}
+        providers = {row['id']: account['provider'] for row, account in zip(read('SELECT id FROM accounts ORDER BY position,created,rowid'), accounts)}
         schedules = []
         auto_id = metadata.get('auto_schedule_id')
         for row in read('SELECT * FROM schedules ORDER BY created'):
-            members = [usernames[item['account_id']] for item in read('SELECT account_id FROM schedule_accounts WHERE schedule_id=?', (row['id'],)) if item['account_id'] in usernames]
+            members = [usernames[item['account_id']] if providers[item['account_id']] == 'anyrouter' else {'username': usernames[item['account_id']], 'provider': providers[item['account_id']]}
+                       for item in read('SELECT account_id FROM schedule_accounts WHERE schedule_id=?', (row['id'],)) if item['account_id'] in usernames]
+            assignments = [{'username': usernames[item['account_id']], 'provider': providers[item['account_id']], 'day': item['day'],
+                            'due_at': item['due_at'], 'expires_at': item['expires_at'],
+                            'status': 'planned' if item['job_status'] in ('pending', 'cancelled') and item['started'] is None else item['status']}
+                           for item in read('SELECT d.*,j.status job_status,j.started FROM schedule_dispatches d LEFT JOIN jobs j ON j.id=d.job_id WHERE schedule_id=? AND expires_at>?', (row['id'], time.time()-86400))]
             schedules.append({'name': row['name'], 'interval_minutes': row['interval_minutes'], 'enabled': bool(row['enabled']), 'next_run': row['next_run'],
                               'last_run': row['last_run'], 'created': row['created'], 'accounts': members, 'auto': row['id'] == auto_id,
-                              'network_route': json.loads(row['network_route'])})
+                              'network_route': json.loads(row['network_route']), 'mode': row['mode'], 'window_start': row['window_start'], 'window_end': row['window_end'], 'assignments': assignments})
         proxies = []
         for row in read('SELECT * FROM proxies ORDER BY created,rowid'):
             config = store.vault.open(row['config_enc'], f'proxy:{row["id"]}')
             proxies.append({'id': row['id'], 'name': row['name'], 'enabled': bool(row['enabled']), 'config': config, 'trusted_key': row['trusted_key'], 'created': row['created']})
-        checkins = [{'username': usernames.get(row['account_id']), 'code': row['code'], 'quota_before': row['quota_before'], 'quota_after': row['quota_after'],
+        checkins = [{'username': usernames.get(row['account_id']), 'provider': providers.get(row['account_id'], 'anyrouter'), 'code': row['code'], 'quota_before': row['quota_before'], 'quota_after': row['quota_after'],
                      'used_before': row['used_before'], 'used_after': row['used_after'], 'reward_amount': row['reward_amount'], 'created': row['created'], 'balance_source': row['balance_source']}
                     for row in read('SELECT * FROM checkins ORDER BY created') if row['account_id'] in usernames]
         document = {'app': 'any-signin-assistant', 'format': FORMAT, 'version': VERSION, 'schema_version': SCHEMA_VERSION, 'created': time.time(),
@@ -117,7 +125,8 @@ def backup_router(store, auth):
                 username = str(item.get('username', '')).strip()
                 if not username:
                     continue
-                fingerprint = store.vault.fingerprint(username)
+                provider = item.get('provider', 'anyrouter')
+                fingerprint = account_fingerprint(store.vault, username, provider)
                 existing = connection.execute('SELECT * FROM accounts WHERE login_hash=?', (fingerprint,)).fetchone()
                 account_id = existing['id'] if existing else uuid.uuid4().hex
                 login = {'username': username}
@@ -149,13 +158,13 @@ def backup_router(store, auth):
                                         item['message'] if newer else existing['message'], max(incoming_time, current_time), account_id))
                     summary['accounts_updated'] += 1
                 else:
-                    connection.execute('INSERT INTO accounts(id,login_hash,login_enc,result_enc,validity,message,last_validated,last_extracted,last_checkin,checkin_status,quota,created,updated,note,position) '
-                                       'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(position),0)+1 FROM accounts))',
+                    connection.execute('INSERT INTO accounts(id,login_hash,login_enc,result_enc,validity,message,last_validated,last_extracted,last_checkin,checkin_status,quota,created,updated,note,provider,position) '
+                                       'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(position),0)+1 FROM accounts))',
                                        (account_id, fingerprint, store.vault.seal(login, f'login:{account_id}'), store.vault.seal(result, f'result:{account_id}') if result else None,
                                         item.get('validity') or 'unknown', str(item.get('message') or '')[:500], item.get('last_validated'), item.get('last_extracted'), item.get('last_checkin'),
-                                        item.get('checkin_status'), item.get('quota'), item.get('created') or now, now, str(item.get('note') or '')[:500]))
+                                        item.get('checkin_status'), item.get('quota'), item.get('created') or now, now, str(item.get('note') or '')[:500], provider))
                     summary['accounts_added'] += 1
-                ids_by_name[username] = account_id
+                ids_by_name[(provider, username)] = account_id
                 if item.get('checkin_route') is not None:
                     account_routes.append((account_id, item['checkin_route']))
                 current = connection.execute('SELECT * FROM accounts WHERE id=?', (account_id,)).fetchone()
@@ -186,9 +195,18 @@ def backup_router(store, auth):
                     schedule_id = uuid.uuid4().hex
                     connection.execute('INSERT INTO schedules(id,name,interval_minutes,enabled,next_run,last_run,created) VALUES (?,?,?,?,?,?,?)',
                                        (schedule_id, str(item['name'])[:100], interval, int(bool(item.get('enabled', True))), now + interval * 60, item.get('last_run'), item.get('created') or now))
-                for username in item.get('accounts') or []:
-                    if username in ids_by_name:
-                        connection.execute('INSERT OR IGNORE INTO schedule_accounts VALUES (?,?)', (schedule_id, ids_by_name[username]))
+                for member in item.get('accounts') or []:
+                    key = (member.get('provider', 'anyrouter'), member['username']) if isinstance(member, dict) else ('anyrouter', member)
+                    if key in ids_by_name:
+                        connection.execute('INSERT OR IGNORE INTO schedule_accounts VALUES (?,?)', (schedule_id, ids_by_name[key]))
+                connection.execute('UPDATE schedules SET mode=?,window_start=?,window_end=? WHERE id=?', (item['mode'], item['window_start'], item['window_end'], schedule_id))
+                for assignment in item.get('assignments', []):
+                    identifier = ids_by_name.get((assignment['provider'], assignment['username']))
+                    if identifier:
+                        connection.execute('INSERT OR IGNORE INTO schedule_dispatches(schedule_id,account_id,day,due_at,expires_at,status) VALUES (?,?,?,?,?,?)',
+                                           (schedule_id, identifier, assignment['day'], assignment['due_at'], assignment['expires_at'], assignment['status']))
+                if item['mode'] == 'random_window':
+                    plan_window(connection, connection.execute('SELECT * FROM schedules WHERE id=?', (schedule_id,)).fetchone(), now)
                 summary['schedules'] += 1
                 if item.get('network_route') is not None:
                     schedule_routes.append((schedule_id, item['network_route']))
@@ -231,9 +249,10 @@ def backup_router(store, auth):
                                                                  for identifier in restored_settings['checkin_fallback_proxy_ids']]
             existing_checkins = {(row['account_id'], round(row['created'], 3)) for row in connection.execute('SELECT account_id,created FROM checkins').fetchall()}
             for item in document.get('checkins') or []:
-                if not isinstance(item, dict) or item.get('username') not in ids_by_name or not item.get('created'):
+                identity = (item.get('provider', 'anyrouter'), item.get('username'))
+                if not isinstance(item, dict) or identity not in ids_by_name or not item.get('created'):
                     continue
-                key = (ids_by_name[item['username']], round(float(item['created']), 3))
+                key = (ids_by_name[identity], round(float(item['created']), 3))
                 if key in existing_checkins:
                     continue
                 existing_checkins.add(key)

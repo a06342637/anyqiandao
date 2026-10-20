@@ -11,7 +11,7 @@ from app.checkin_state import DailyCheckinState, observe_balance, confirmed_toda
 from app.errors import TaskError
 from app.schemas import RuntimeSettings
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def checkin_earned(row):
@@ -199,6 +199,27 @@ class Store:
             if version < 11:
                 # Daily evidence can now include an explicit administrator acknowledgement.
                 connection.execute('PRAGMA user_version=11')
+            if version < 12:
+                for table, name, definition in (
+                    ('accounts', 'provider', "TEXT NOT NULL DEFAULT 'anyrouter'"),
+                    ('schedules', 'mode', "TEXT NOT NULL DEFAULT 'interval'"),
+                    ('schedules', 'window_start', "TEXT NOT NULL DEFAULT '13:00'"),
+                    ('schedules', 'window_end', "TEXT NOT NULL DEFAULT '18:00'"),
+                    ('jobs', 'not_after', 'REAL'),
+                ):
+                    if name not in {row['name'] for row in connection.execute(f'PRAGMA table_info({table})')}:
+                        connection.execute(f'ALTER TABLE {table} ADD COLUMN {name} {definition}')
+                connection.executescript('''
+                    CREATE TABLE IF NOT EXISTS schedule_dispatches (
+                        schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+                        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                        day TEXT NOT NULL, due_at REAL NOT NULL, expires_at REAL NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'planned', job_id TEXT,
+                        PRIMARY KEY(schedule_id,account_id,day)
+                    );
+                    CREATE INDEX IF NOT EXISTS schedule_dispatch_due ON schedule_dispatches(schedule_id,status,due_at);
+                    PRAGMA user_version=12;
+                ''')
 
     @contextmanager
     def connection(self):
@@ -310,6 +331,10 @@ class Store:
         if account:
             account['login'] = self.vault.open(account['login_enc'], f'login:{account_id}')
             account['result'] = self.vault.open(account['result_enc'], f'result:{account_id}') if account['result_enc'] else None
+            if account['result'] and account['provider'] != 'anyrouter':
+                account['result']['provider'] = account['provider']
+            elif account['result']:
+                account['result'].pop('provider', None)
         return account
 
     def mark_submission(self, account_id, api_user):
@@ -349,6 +374,7 @@ class Store:
         return {key: row[key] for key in ('id', 'validity', 'message', 'last_validated', 'last_extracted', 'last_checkin',
                                          'checkin_status', 'quota', 'created', 'updated', 'note', 'position')} | {
             'username': login['username'], 'has_password': bool(login.get('password')), 'has_result': bool(row['result_enc']),
+            'provider': row['provider'],
             'credential_source': 'password' if login.get('password') else 'session' if row['result_enc'] else 'missing',
             'last_balance': self.checkin_balance(account_id=row['id']), 'checkin_route': json.loads(row['checkin_route']),
             **self.daily_view(row)}
@@ -367,6 +393,9 @@ class Store:
         if selection.validity:
             clauses.append('validity=?')
             values.append(selection.validity)
+        if selection.provider:
+            clauses.append('provider=?')
+            values.append(selection.provider)
         if selection.needs_confirmation:
             clauses.append("checkin_today_status(id,result_enc,checkin_state_enc,checkin_status,last_checkin) IN ('uncertain','no_credit')")
         if selection.only_extracted or exportable:
@@ -388,7 +417,7 @@ class Store:
             return connection.execute(query, values).fetchone()['count']
         return self.one(query, values)['count']
 
-    def enqueue(self, kind, account_id=None, *, proxy_id=None, source='manual', payload=None, dedupe_key=None, connection=None):
+    def enqueue(self, kind, account_id=None, *, proxy_id=None, source='manual', payload=None, dedupe_key=None, connection=None, not_after=None):
         def insert(current):
             if dedupe_key:
                 existing = current.execute('SELECT id FROM jobs WHERE dedupe_key=?', (dedupe_key,)).fetchone()
@@ -400,8 +429,8 @@ class Store:
                 return existing['id'], False
             job_id = uuid.uuid4().hex
             encoded = self.vault.seal(payload, f'job:{job_id}') if payload else None
-            current.execute('INSERT INTO jobs(id,account_id,proxy_id,kind,source,payload_enc,dedupe_key,created) VALUES (?,?,?,?,?,?,?,?)',
-                            (job_id, account_id, proxy_id, kind, source, encoded, dedupe_key, time.time()))
+            current.execute('INSERT INTO jobs(id,account_id,proxy_id,kind,source,payload_enc,dedupe_key,created,not_after) VALUES (?,?,?,?,?,?,?,?,?)',
+                            (job_id, account_id, proxy_id, kind, source, encoded, dedupe_key, time.time(), not_after))
             return job_id, True
         if connection is not None:
             return insert(connection)
@@ -454,6 +483,7 @@ class Store:
             connection.execute('DELETE FROM console_results WHERE expires<?', (now,))
             stats_removed = connection.execute("DELETE FROM checkins WHERE created<? AND (job_id IS NULL OR job_id NOT IN (SELECT id FROM jobs WHERE status IN ('pending','running')))",
                                                (now - settings.stats_retention_days * 86400,)).rowcount
+            connection.execute('DELETE FROM schedule_dispatches WHERE expires_at<?', (now - max(7, settings.queue_retention_days) * 86400,))
             connection.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', ('last_log_cleanup', str(now)))
         self.log('system', f'按保留策略清理了 {removed} 条运行/账号日志、{jobs_removed} 条已结束队列记录、{stats_removed} 条账号签到明细；账号、凭证及等待/运行任务不受影响')
         return {'removed': removed + jobs_removed + stats_removed, 'logs': removed, 'jobs': jobs_removed, 'checkins': stats_removed}

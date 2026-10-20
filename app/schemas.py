@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.passwords import ADMIN_PASSWORD_MIN, ADMIN_PASSWORD_MAX
+from app.providers import Provider
 
 
 class StrictModel(BaseModel):
@@ -20,6 +21,7 @@ class AdminPasswordInput(StrictModel):
 
 
 class AccountInput(StrictModel):
+    provider: Provider = 'anyrouter'
     username: str = Field(min_length=1, max_length=512)
     password: str = Field(min_length=1, max_length=4096)
     row_id: str = Field(min_length=1, max_length=100)
@@ -78,6 +80,7 @@ class InsightInput(StrictModel):
 
 
 class Selection(StrictModel):
+    provider: Provider | None = None
     ids: list[str] = Field(default_factory=list, max_length=10000)
     all_matching: bool = False
     exclude_ids: list[str] = Field(default_factory=list, max_length=10000)
@@ -173,6 +176,15 @@ class ScheduleInput(Selection):
     enabled: bool = True
     keep_accounts: bool = False
     network_route: NetworkRoute = Field(default_factory=lambda: NetworkRoute(mode='inherit'))
+    mode: Literal['interval', 'random_window'] = 'interval'
+    window_start: str = Field(default='13:00', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
+    window_end: str = Field(default='18:00', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
+
+    @model_validator(mode='after')
+    def valid_window(self):
+        if self.mode == 'random_window' and self.window_start >= self.window_end:
+            raise ValueError('随机签到须设置同一天内结束晚于开始的时间范围（北京时间）')
+        return self
 
 
 class BrandingSettings(StrictModel):

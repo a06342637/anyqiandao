@@ -3,10 +3,10 @@ import Papa from 'papaparse';
 import { ArrowDownToLine, ArrowRight, Eye, EyeOff, FileUp, KeyRound, ListOrdered, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { api, downloadBlob, newId, refreshData } from './api';
 import { Button, useToast, useTrack } from './ui';
-import type { Dashboard } from './types';
+import type { Dashboard, Provider } from './types';
 import CredentialImport from './CredentialImport';
 
-interface ImportRow { username: string; password: string; row_id: string; }
+interface ImportRow { username: string; password: string; row_id: string; provider: Provider; }
 interface ImportResult { queued: number; skipped: number; account_ids: string[]; job_ids: string[]; duplicate_count: number; }
 const rowBytes = (row: ImportRow) => new TextEncoder().encode(JSON.stringify(row)).length;
 
@@ -16,6 +16,7 @@ export default function ExtractPage({ onQueue, onAccounts, onSettings, dashboard
   const toast = useToast();
   const track = useTrack();
   const [mode, setMode] = useState<'single' | 'bulk' | 'session'>('single');
+  const [provider, setProvider] = useState<Provider>('anyrouter');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [visible, setVisible] = useState(false);
@@ -40,12 +41,12 @@ export default function ExtractPage({ onQueue, onAccounts, onSettings, dashboard
       };
       for (let index = 0; index < total; index += 1) {
         let row: ImportRow;
-        if (mode === 'single') row = { username: username.trim(), password, row_id: '1' };
+        if (mode === 'single') row = { username: username.trim(), password, row_id: '1', provider };
         else {
           const line = lines[index], divider = line.indexOf('----');
           if (divider < 1 || !line.slice(divider + 4)) throw new Error(`第 ${index + 1} 行格式不正确，请使用账号----密码`);
           if (line.indexOf('----', divider + 4) !== -1) throw new Error(`第 ${index + 1} 行存在分隔歧义，请改用 CSV 上传，密码不会被猜测或截断`);
-          row = { username: line.slice(0, divider).trim(), password: line.slice(divider + 4), row_id: String(index + 1) };
+          row = { username: line.slice(0, divider).trim(), password: line.slice(divider + 4), row_id: String(index + 1), provider };
         }
         buffer.push(row); bytes += rowBytes(row);
         if (buffer.length >= 100 || bytes >= 400000 || index === total - 1) {
@@ -83,7 +84,7 @@ export default function ExtractPage({ onQueue, onAccounts, onSettings, dashboard
             if (result.errors.length || !account?.trim() || typeof secret !== 'string' || !secret) {
               failed = true; parser.abort(); reject(new Error(`CSV 第 ${rowCount} 条数据不正确，请检查 username/password 列、引号和空字段`)); return;
             }
-            const row = { username: account.trim(), password: secret, row_id: String(rowCount) };
+            const row = { username: account.trim(), password: secret, row_id: String(rowCount), provider };
             buffer.push(row); bytes += rowBytes(row);
             if (buffer.length >= 100 || bytes >= 400000) {
               parser.pause(); const chunk = buffer; buffer = []; bytes = 0;
@@ -104,7 +105,8 @@ export default function ExtractPage({ onQueue, onAccounts, onSettings, dashboard
 
   return <>
     <div className="extract-grid"><section className="panel input-panel"><div className="panel-heading"><div className="heading-icon"><KeyRound size={19} /></div><div><h2>添加账号</h2><p>已添加的账号自动跳过，不重复添加</p></div><span className="small-label push-right">步骤 01</span></div>
-      <div className="segmented"><button disabled={busy} className={mode === 'single' ? 'selected' : ''} onClick={() => setMode('single')}>单个账号</button><button disabled={busy} className={mode === 'bulk' ? 'selected' : ''} onClick={() => setMode('bulk')}>批量导入</button><button disabled={busy} className={mode === 'session' ? 'selected' : ''} onClick={() => setMode('session')}>Session 导入</button></div>
+      <label className="field">账号平台<select aria-label="新增账号平台" disabled={busy} value={provider} onChange={event => { setProvider(event.target.value as Provider); if (event.target.value === 'agentrouter' && mode === 'session') setMode('single'); }}><option value="anyrouter">AnyRouter</option><option value="agentrouter">AgentRouter</option></select><span className="form-hint">{provider === 'agentrouter' ? 'AgentRouter 使用账号密码在新会话重新登录，查询用户信息触发自动签到；按实际新增额度核验。' : 'AnyRouter 使用独立签到接口，核对固定 $25 到账。'} 批量导入与 CSV 使用当前选择的平台。</span></label>
+      <div className="segmented"><button disabled={busy} className={mode === 'single' ? 'selected' : ''} onClick={() => setMode('single')}>单个账号</button><button disabled={busy} className={mode === 'bulk' ? 'selected' : ''} onClick={() => setMode('bulk')}>批量导入</button>{provider === 'anyrouter' && <button disabled={busy} className={mode === 'session' ? 'selected' : ''} onClick={() => setMode('session')}>Session 导入</button>}</div>
       {mode === 'session' ? <CredentialImport /> : <form onSubmit={submitRows} autoComplete="off">
         {mode === 'single' ? <><label className="field">账号<input placeholder="输入用户名或邮箱" value={username} onChange={event => setUsername(event.target.value)} required maxLength={512} disabled={busy} autoComplete="off" /></label><label className="field">密码<div className="password-field"><input type={visible ? 'text' : 'password'} placeholder="输入账号的登录密码" value={password} onChange={event => setPassword(event.target.value)} required maxLength={4096} disabled={busy} autoComplete="new-password" /><button className="icon-button" type="button" aria-label={visible ? '隐藏密码' : '显示密码'} onClick={() => setVisible(!visible)}>{visible ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label></> : <><label className="field">逐行粘贴账号<textarea rows={5} placeholder={'账号----密码\n每行一个；复杂密码推荐使用 CSV'} value={text} onChange={event => setText(event.target.value)} disabled={busy} autoComplete="off" spellCheck={false} /></label><div className="csv-actions"><input ref={fileInput} type="file" accept=".csv,text/csv" aria-label="上传 CSV 文件" hidden onChange={event => { const file = event.target.files?.[0]; if (file) void importCsv(file); }} /><Button disabled={busy} onClick={() => fileInput.current?.click()}><FileUp size={16} />上传 CSV</Button><Button variant="ghost" disabled={busy} onClick={() => { downloadBlob(new Blob(['\uFEFFusername,password\r\n'], { type: 'text/csv;charset=utf-8' }), '账号导入模板.csv'); toast('CSV 模板已下载', 'success'); }}><ArrowDownToLine size={15} />下载模板</Button></div><p className="form-hint">大批量推荐 CSV，按块上传，无固定账号总数上限。逗号、引号、换行等特殊字符须按 CSV 规范引用。</p></>}
         <div className="secure-note"><LockKeyhole size={15} /><span>账号密码 AES-256 加密保存在你的服务器上，用于自动重新提取；开启全自动时，提取成功后自动签到并加入默认计划。</span></div>

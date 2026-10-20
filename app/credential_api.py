@@ -4,6 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.schemas import CredentialImport, CredentialPair
+from app.random_schedule import plan_window
 
 
 def credential_router(store, auth):
@@ -15,6 +16,10 @@ def credential_router(store, auth):
             return None
         schedule_id = store.auto_schedule(connection, settings.auto_checkin_interval_minutes)
         connection.execute('INSERT OR IGNORE INTO schedule_accounts VALUES (?,?)', (schedule_id, account_id))
+        schedule = connection.execute('SELECT * FROM schedules WHERE id=?', (schedule_id,)).fetchone()
+        if schedule['mode'] == 'random_window':
+            plan_window(connection, schedule, time.time())
+            return None
         job_id, _ = store.enqueue('checkin', account_id, source='import:session', connection=connection)
         return job_id
 
@@ -25,7 +30,7 @@ def credential_router(store, auth):
         added, skipped, identifiers, jobs = 0, 0, [], []
         with store.transaction() as connection:
             known = {}
-            for row in connection.execute('SELECT id,result_enc FROM accounts WHERE result_enc IS NOT NULL'):
+            for row in connection.execute("SELECT id,result_enc FROM accounts WHERE result_enc IS NOT NULL AND provider='anyrouter'"):
                 result = store.vault.open(row['result_enc'], f'result:{row["id"]}')
                 known[str(result.get('api_user', ''))] = row['id']
             for item in payload.accounts:
@@ -58,6 +63,8 @@ def credential_router(store, auth):
             row = connection.execute('SELECT * FROM accounts WHERE id=?', (account_id,)).fetchone()
             if not row:
                 raise HTTPException(404, '账号不存在')
+            if row['provider'] != 'anyrouter':
+                raise HTTPException(400, 'AgentRouter 请通过账号密码重新登录，不接受其他平台的 Session')
             if connection.execute("SELECT 1 FROM jobs WHERE account_id=? AND status IN ('pending','running') LIMIT 1", (account_id,)).fetchone():
                 raise HTTPException(409, '该账号仍有等待或执行中的任务，请先完成或取消，再更新凭证')
             old = store.vault.open(row['result_enc'], f'result:{account_id}') if row['result_enc'] else None

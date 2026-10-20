@@ -11,12 +11,12 @@ from python_socks.async_.asyncio import Proxy as SocksProxy
 
 from app.errors import HostKeyRequired, TaskError
 
-ALLOWED_HOSTS = {'anyrouter.top', 'challenges.cloudflare.com', 'fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net'}
+ALLOWED_HOSTS = {'anyrouter.top', 'agentrouter.org', 'challenges.cloudflare.com', 'fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net'}
 
 
 def allowed_destination(host):
     normalized = host.rstrip('.').lower()
-    return normalized in ALLOWED_HOSTS or normalized.endswith('.anyrouter.top')
+    return normalized in ALLOWED_HOSTS or normalized.endswith(('.anyrouter.top', '.agentrouter.org'))
 
 
 def parse_proxy(line):

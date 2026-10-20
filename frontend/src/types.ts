@@ -7,14 +7,16 @@ export interface DailyCheckin {
   checkin_day: string; today_checkin: 'confirmed' | 'uncertain' | 'no_credit' | 'unconfirmed'; last_signed_at: number | null;
   manual_confirmation: boolean;
 }
+export type Provider = 'anyrouter' | 'agentrouter';
 export interface Account extends DailyCheckin {
+  provider: Provider;
   checkin_route: NetworkRoute;
   id: string; username: string; validity: string; message: string; has_password: boolean; has_result: boolean;
   credential_source: 'password' | 'session' | 'missing';
   last_validated: number | null; last_extracted: number | null; last_checkin: number | null;
   checkin_status: string | null; quota: number | null; created: number; updated: number; note: string; position: number; last_balance: CheckinBalance | null;
 }
-export interface Selection { ids?: string[]; all_matching?: boolean; validity?: string; exclude_ids?: string[]; only_extracted?: boolean; needs_confirmation?: boolean; }
+export interface Selection { ids?: string[]; all_matching?: boolean; validity?: string; exclude_ids?: string[]; only_extracted?: boolean; needs_confirmation?: boolean; provider?: Provider; }
 export interface PageData<Item> { items: Item[]; total: number; page: number; limit: number; }
 export interface Job {
   id: string; account_id: string | null; proxy_id: string | null; kind: string; status: string; source: string;
@@ -37,6 +39,7 @@ export interface QueueData extends PageData<Job>, QueueSettings {
   counts: { queue_pending: number; queue_running: number; checkin_pending: number; checkin_running: number };
 }
 export interface Schedule {
+  mode: 'interval' | 'random_window'; window_start: string; window_end: string;
   network_route: NetworkRoute;
   id: string; name: string; interval_minutes: number; enabled: boolean; next_run: number;
   last_run: number | null; created: number; account_count: number; account_ids?: string[];
@@ -67,6 +70,7 @@ export interface LogEntry {
 }
 export interface ActionResult { queued: number; skipped?: number; filtered_count?: number; needs_password?: string[]; needs_password_count?: number; job_ids?: string[]; }
 export interface StatsAccount extends DailyCheckin {
+  provider: Provider;
   account_id: string; username: string; note: string; quota: number | null; validity: string; signed: number; already: number; failed: number; uncertain: number; no_credit: number;
   earned: number; last: number | null; last_code: string | null; last_balance: CheckinBalance | null;
   manual: number;

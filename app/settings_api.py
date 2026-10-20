@@ -9,6 +9,7 @@ from app.config import VERSION
 from app.proxy import parse_proxy
 from app.schemas import AccountCheckinRoute, BrandingSettings, OperationRoutes, ProxyImport, ProxyInput, ProxyTrust, RuntimeSettings, ScheduleInput, Selection
 from app.network_routes import validate_route
+from app.random_schedule import plan_window
 
 
 def settings_router(store, auth):
@@ -220,7 +221,9 @@ def settings_router(store, auth):
                 previous = connection.execute('SELECT * FROM schedules WHERE id=?', (schedule_id,)).fetchone()
                 if not previous:
                     raise HTTPException(404, '签到计划不存在')
-                changed = previous['interval_minutes'] != payload.interval_minutes or (payload.enabled and not previous['enabled'])
+                changed = (previous['interval_minutes'] != payload.interval_minutes or previous['mode'] != payload.mode
+                           or previous['window_start'] != payload.window_start or previous['window_end'] != payload.window_end
+                           or payload.enabled and not previous['enabled'])
                 next_run = now + payload.interval_minutes * 60 if changed else previous['next_run']
                 connection.execute('UPDATE schedules SET name=?,interval_minutes=?,enabled=?,next_run=? WHERE id=?',
                                    (payload.name, payload.interval_minutes, int(payload.enabled), next_run, schedule_id))
@@ -235,7 +238,21 @@ def settings_router(store, auth):
                 connection.execute('INSERT INTO schedule_accounts(schedule_id,account_id) SELECT ?,id FROM accounts WHERE ' + where,
                                    [schedule_id, *values])
             connection.execute('UPDATE schedules SET network_route=? WHERE id=?', (payload.network_route.model_dump_json(), schedule_id))
+            connection.execute('UPDATE schedules SET mode=?,window_start=?,window_end=? WHERE id=?', (payload.mode, payload.window_start, payload.window_end, schedule_id))
+            if payload.mode == 'random_window':
+                plan_window(connection, connection.execute('SELECT * FROM schedules WHERE id=?', (schedule_id,)).fetchone(), now, replan=True)
         return {'id': schedule_id}
+
+    @router.get('/schedules/{schedule_id}/assignments')
+    def schedule_assignments(schedule_id: str, page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100)):
+        if not store.one('SELECT id FROM schedules WHERE id=?', (schedule_id,)):
+            raise HTTPException(404, '签到计划不存在')
+        rows = store.all("SELECT d.*,a.login_enc,a.provider,j.status AS job_status FROM schedule_dispatches d JOIN accounts a ON a.id=d.account_id LEFT JOIN jobs j ON j.id=d.job_id WHERE d.schedule_id=? AND d.expires_at>? ORDER BY d.day,d.due_at LIMIT ? OFFSET ?",
+                         (schedule_id, time.time()-86400, limit, (page-1)*limit))
+        items = [{'account_id': r['account_id'], 'username': store.vault.open(r['login_enc'], f'login:{r["account_id"]}')['username'],
+                  'provider': r['provider'], 'day': r['day'], 'due_at': r['due_at'], 'status': r['job_status'] or r['status']} for r in rows]
+        total = store.one('SELECT COUNT(*) n FROM schedule_dispatches WHERE schedule_id=? AND expires_at>?', (schedule_id, time.time()-86400))['n']
+        return {'items': items, 'total': total, 'page': page, 'limit': limit}
 
     @router.post('/schedules')
     def create_schedule(payload: ScheduleInput):
@@ -257,9 +274,17 @@ def settings_router(store, auth):
         if action == 'resume':
             if not store.one('SELECT account_id FROM schedule_accounts WHERE schedule_id=? LIMIT 1', (schedule_id,)):
                 raise HTTPException(409, '计划中没有账号，请先重新选择账号')
-            store.execute('UPDATE schedules SET enabled=1,next_run=? WHERE id=?', (time.time() + schedule['interval_minutes'] * 60, schedule_id))
+            with store.transaction() as connection:
+                connection.execute('UPDATE schedules SET enabled=1,next_run=? WHERE id=?', (time.time() + schedule['interval_minutes'] * 60, schedule_id))
+                if schedule['mode'] == 'random_window':
+                    plan_window(connection, schedule, time.time(), replan=True)
             return {'ok': True}
         if action == 'run':
+            if schedule['mode'] == 'random_window':
+                with store.transaction() as connection:
+                    connection.execute("UPDATE jobs SET status='cancelled',message='重新安排随机签到',finished=? WHERE source=? AND status='pending'", (time.time(), f'schedule:{schedule_id}'))
+                    plan_window(connection, schedule, time.time(), replan=True)
+                return {'queued': 0, 'job_ids': [], 'planned': True}
             queued, job_ids = 0, []
             with store.transaction() as connection:
                 for account in connection.execute("SELECT account_id FROM schedule_accounts JOIN accounts ON accounts.id=account_id WHERE schedule_id=?", (schedule_id,)):

@@ -3,7 +3,7 @@ import type { Account, PageData, Selection } from './types';
 import { useResource } from './api';
 import { Badge, Button, EmptyState, ErrorNotice, Pagination, usePageClamp, usePageSize } from './ui';
 
-export function useSelection(filter: Pick<Selection, 'validity' | 'only_extracted' | 'needs_confirmation'> = {}) {
+export function useSelection(filter: Pick<Selection, 'validity' | 'only_extracted' | 'needs_confirmation' | 'provider'> = {}) {
   const [ids, setIds] = useState<Set<string>>(new Set());
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
@@ -32,6 +32,6 @@ export function AccountPicker({ onChange }: { onChange: (selection: Selection) =
     onChange(next);
   };
   return <div className="account-picker"><div className="picker-heading"><strong>选择签到账号</strong><span>已选 {selection.count(resource.data?.total || 0)} 个</span><Button variant="ghost" onClick={() => { selection.selectAll(); onChange({ all_matching: true, only_extracted: true }); }}>全选已提取账号</Button><Button variant="ghost" onClick={() => { selection.clear(); onChange({ ids: [] }); }}>清空</Button></div><ErrorNotice message={resource.error} retry={resource.reload} />
-    {!resource.data?.items.length ? <EmptyState title="还没有可选账号" description="请先提取凭证，再创建签到计划。" /> : <div className="picker-list">{resource.data.items.map(account => <label className="picker-row" key={account.id}><input type="checkbox" checked={selection.selected(account.id)} onChange={event => toggle(account.id, event.target.checked)} /><span className="ellipsis">{account.username}</span><Badge status={account.validity} /></label>)}</div>}
+    {!resource.data?.items.length ? <EmptyState title="还没有可选账号" description="请先提取凭证，再创建签到计划。" /> : <div className="picker-list">{resource.data.items.map(account => <label className="picker-row" key={account.id}><input type="checkbox" checked={selection.selected(account.id)} onChange={event => toggle(account.id, event.target.checked)} /><span className="ellipsis">{account.username} · {account.provider === 'agentrouter' ? 'AgentRouter' : 'AnyRouter'}</span><Badge status={account.validity} /></label>)}</div>}
     <Pagination page={page} total={resource.data?.total || 0} limit={limit} onChange={setPage} onLimitChange={setLimit} /><p className="form-hint">选择跨页保留。失效凭证会按设置尝试自动重新提取；重提失败或未保存密码时停止该账号本轮签到，并记录原因。</p></div>;
 }
