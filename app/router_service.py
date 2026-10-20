@@ -232,7 +232,8 @@ class BrowserSession:
         return False
 
     async def api(self, path, *, method='GET', headers=None, body=None, timeout=30000, deadline=None):
-        if urlsplit(getattr(self.page, 'url', self.origin)).hostname != urlsplit(self.origin).hostname:
+        page_address = urlsplit(getattr(self.page, 'url', self.origin))
+        if page_address.scheme != 'https' or page_address.hostname != urlsplit(self.origin).hostname or page_address.port not in (None, 443):
             raise TaskError('invalid', '当前页面不属于该账号平台，已阻止发送凭证或请求')
         deadline = deadline or time.monotonic() + self.settings.login_timeout
         request_headers = dict(headers or {})
