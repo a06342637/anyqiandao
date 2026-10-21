@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { ArrowLeft, Check, Clock3, Code2, DatabaseBackup, LockKeyhole, Network, Palette, Pencil, Play, Plus, Save, RefreshCw, Settings2, Sparkles, Trash2, Upload } from 'lucide-react';
 import UpdatePanel from './UpdatePanel';
+import { rememberUpdateView, restoreUpdateView } from './updateState';
 import RemoteBackupPanel from './RemoteBackupPanel';
 import AppearancePanel from './AppearancePanel';
 import { OperationRouting } from './NetworkRouting';
@@ -22,13 +23,13 @@ const settingsTabs = [
 ] as const;
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<typeof settingsTabs[number]['id']>('runtime');
+  const [tab, setTab] = useState<typeof settingsTabs[number]['id']>(() => restoreUpdateView() ? 'updates' : 'runtime');
   const branding = useBranding();
   const { data, error, reload } = useResource<SettingsData>('/settings', 0);
   const current = settingsTabs.find(item => item.id === tab)!;
   return <Modal title="设置" subtitle="管理你的工作空间" onClose={onClose} wide className="settings-modal">
     <div className="settings-layout">
-      <nav className="settings-nav" aria-label="设置分类">{settingsTabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)}><item.icon size={17} /><span>{item.label}</span></button>)}<span className="settings-nav-version">{branding.site_name}<br />v{data?.version || __APP_VERSION__}</span></nav>
+      <nav className="settings-nav" aria-label="设置分类">{settingsTabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} aria-current={tab === item.id ? 'page' : undefined} onClick={() => { rememberUpdateView(item.id === 'updates'); setTab(item.id); }}><item.icon size={17} /><span>{item.label}</span></button>)}<span className="settings-nav-version">{branding.site_name}<br />v{data?.version || __APP_VERSION__}</span></nav>
       <div className="settings-content" key={tab}>
         <div className="settings-content-heading"><h3>{current.label}</h3><p>{current.description}</p></div>
         <ErrorNotice message={error} retry={reload} />

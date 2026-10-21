@@ -573,6 +573,8 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; text-align: lef
 .update-source .field { margin-top: 16px; }
 .update-operation { margin-top: 20px; border: 1px solid var(--line); border-radius: 10px; padding: 16px; font-size: 12px; }
 .update-operation-title { display: flex; gap: 8px; align-items: flex-start; }
+.update-operation-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; color: var(--muted); }
+.loading-update { width: min(520px, calc(100% - 40px)); box-sizing: border-box; margin-top: 0; }
 .update-operation-title svg { flex-shrink: 0; color: var(--accent); }
 .update-operation-title span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .update-operation progress { width: 100%; height: 6px; margin: 12px 0 8px; accent-color: var(--accent); }

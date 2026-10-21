@@ -10,6 +10,7 @@ import SchedulesPage from './SchedulesPage';
 import LogsPage from './LogsPage';
 import QueuePage from './QueuePage';
 import SettingsPanel from './SettingsPanel';
+import { clearUpdateTracking, readUpdateSnapshot, rememberUpdateView, restoreUpdateView } from './updateState';
 
 type Page = 'dashboard' | 'extract' | 'accounts' | 'schedules' | 'logs' | 'queue';
 const navigation = [
@@ -30,7 +31,8 @@ export default function App() {
   const [theme, setTheme] = useState(initialTheme);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [page, setPage] = useState<Page>('dashboard');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(restoreUpdateView);
+  const [savedUpdate] = useState(readUpdateSnapshot);
   const [logJob, setLogJob] = useState('');
   const [logAccount, setLogAccount] = useState('');
   const [toasts, setToasts] = useState<{ message: string; kind: string; id: string; created: number }[]>([]);
@@ -54,17 +56,27 @@ export default function App() {
   }, []);
   useEffect(() => {
     let active = true;
-    void api<{ csrf_token: string }>('/auth/me').then(result => { if (active) { setCsrfToken(result.csrf_token); setAuthenticated(true); } }).catch(error => {
-      if (active) { setAuthenticated(false); if (error.status === 401) window.location.replace('/login'); if (error.status !== 401) setInitialError('暂时无法连接服务，请检查网络后重试'); }
-    });
-    const expired = () => { setCsrfToken(''); setAuthenticated(false); setSettingsOpen(false); trackers.current.clear(); setToasts([]); window.location.replace('/login'); };
+    let retry: number | undefined;
+    const authenticate = () => {
+      void api<{ csrf_token: string }>('/auth/me').then(result => {
+        if (active) { setCsrfToken(result.csrf_token); setAuthenticated(true); setInitialError(''); }
+      }).catch(error => {
+        if (!active) return;
+        setAuthenticated(false);
+        if (error.status === 401) { clearUpdateTracking(); window.location.replace('/login'); return; }
+        setInitialError(restoreUpdateView() ? '服务暂时不可达，正在自动重新连接更新进度…' : '暂时无法连接服务，正在自动重试…');
+        retry = window.setTimeout(authenticate, 2500);
+      });
+    };
+    authenticate();
+    const expired = () => { active = false; window.clearTimeout(retry); clearUpdateTracking(); setCsrfToken(''); setAuthenticated(false); setSettingsOpen(false); trackers.current.clear(); setToasts([]); window.location.replace('/login'); };
     const channel = new BroadcastChannel('any-session');
     channel.onmessage = expired;
     const hide = () => { document.documentElement.style.visibility = 'hidden'; };
     const show = (event: PageTransitionEvent) => { if (event.persisted) window.location.reload(); };
     window.addEventListener('pagehide', hide); window.addEventListener('pageshow', show);
     window.addEventListener('any-auth-expired', expired);
-    return () => { active = false; channel.close(); window.removeEventListener('any-auth-expired', expired); window.removeEventListener('pagehide', hide); window.removeEventListener('pageshow', show); };
+    return () => { active = false; window.clearTimeout(retry); channel.close(); window.removeEventListener('any-auth-expired', expired); window.removeEventListener('pagehide', hide); window.removeEventListener('pageshow', show); };
   }, []);
   useEffect(() => { const timer = window.setInterval(() => setToasts(previous => previous.length ? previous.filter(item => item.kind === 'progress' || Date.now() - item.created < 8500) : previous), 1000); return () => clearInterval(timer); }, []);
   const notify = useCallback((message: string, kind = 'info') => setToasts(previous => [...previous, { message, kind, id: newId(), created: Date.now() }].slice(-4)), []);
@@ -131,7 +143,7 @@ export default function App() {
   const toggleTheme = () => { const next = theme === 'light' ? 'dark' : 'light'; setTheme(next); try { localStorage.setItem('any-theme', next); } catch {} };
   const openLogs = (jobId: string) => { setLogJob(jobId); setLogAccount(''); setPage('logs'); };
   const clearLogFilter = () => { setLogJob(''); setLogAccount(''); };
-  const logout = async () => { try { await api('/auth/logout', 'POST'); setAuthenticated(false); setSettingsOpen(false); setCsrfToken(''); trackers.current.clear(); setToasts([]); const channel = new BroadcastChannel('any-session'); channel.postMessage('logout'); channel.close(); window.location.replace('/login'); } catch (error) { notify((error as Error).message, 'error'); } };
+  const logout = async () => { try { await api('/auth/logout', 'POST'); clearUpdateTracking(); setAuthenticated(false); setSettingsOpen(false); setCsrfToken(''); trackers.current.clear(); setToasts([]); const channel = new BroadcastChannel('any-session'); channel.postMessage('logout'); channel.close(); window.location.replace('/login'); } catch (error) { notify((error as Error).message, 'error'); } };
   const themeButton = <button className="icon-button" aria-label={theme === 'light' ? '切换深色主题' : '切换浅色主题'} title="明暗切换" onClick={toggleTheme}>{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button>;
   const queueState = !dashboard ? null : dashboard.storage_error ? { tone: 'red', text: '存储异常' } : dashboard.paused ? { tone: 'amber', text: '队列已暂停' } : dashboard.jobs.running ? { tone: 'blue', text: `执行中 · ${dashboard.jobs.pending} 个等待` } : dashboard.jobs.pending ? { tone: 'blue', text: `${dashboard.jobs.pending} 个任务等待` } : { tone: 'green', text: '队列空闲' };
 
@@ -172,8 +184,8 @@ export default function App() {
         {page === 'queue' && <QueuePage timezone={timezone} onLogs={openLogs} />}
         <footer className="footer"><span>{site.site_name} <b>v{__APP_VERSION__}</b></span><span><ShieldCheck size={13} /> AES-256-GCM 字段加密 · 私有部署</span></footer>
       </main>
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
-    </div> : <div className="loading-screen"><p>{initialError || '正在验证登录…'}</p></div>}
+      {settingsOpen && <SettingsPanel onClose={() => { rememberUpdateView(false); setSettingsOpen(false); }} />}
+    </div> : <div className="loading-screen"><p>{initialError || '正在验证登录…'}</p>{initialError && settingsOpen && savedUpdate?.operation.id && <section className="update-operation loading-update" aria-label="上次保存的更新进度"><strong>上次保存的更新 · v{savedUpdate.operation.version}</strong><p>{savedUpdate.operation.message} · {savedUpdate.operation.progress || 0}%</p><progress max={100} value={savedUpdate.operation.progress || 0} aria-label="更新进度" /><p>连接恢复后将自动读取服务器的最新状态。</p></section>}</div>}
     <div className="toast-stack">{toasts.map(item => <div key={item.id} className={`toast ${item.kind}`} role={item.kind === 'error' ? 'alert' : 'status'}>{item.kind === 'progress' && <span className="loading-dot" />}<span>{item.message}</span><button className="icon-button small" aria-label="关闭提示" onClick={() => setToasts(previous => previous.filter(toast => toast.id !== item.id))}><X size={16} /></button></div>)}</div>
   </ConfirmProvider></TrackContext.Provider></ToastContext.Provider></BrandingContext.Provider>;
 }

@@ -1,4 +1,6 @@
-# any签到助手 v0.7.3
+# any签到助手 v0.7.4
+
+更新页支持刷新恢复进度、服务切换自动重连，并保留最近一次成功、失败或回滚的结果及全部步骤。详见 CHANGELOG.md。
 
 私有部署的 AnyRouter / AgentRouter 凭证提取、账号检测与自动签到工作空间。React / TypeScript / Vite 前端，FastAPI / Playwright / SQLite 后端。
 
