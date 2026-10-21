@@ -76,6 +76,7 @@ export interface StatsAccount extends DailyCheckin {
   manual: number;
 }
 export interface Stats {
+  provider: Provider | null;
   manual: number;
   range: 'day' | 'week' | 'month'; since: number; until: number; timezone: string; attempts: number; signed: number; already: number; failed: number; uncertain: number; no_credit: number; earned: number;
   balance_total: number; balance_accounts: number; accounts_total: number; legacy_records: number; unmeasured: number;

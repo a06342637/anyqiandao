@@ -46,8 +46,8 @@ def credential_router(store, auth):
                 now = time.time()
                 login = store.vault.seal({'username': username, 'password': None}, f'login:{identifier}')
                 result = store.vault.seal({'session': item.session, 'api_user': item.api_user}, f'result:{identifier}')
-                connection.execute("INSERT INTO accounts(id,login_hash,login_enc,result_enc,validity,message,last_extracted,created,updated,position) VALUES (?,?,?,?,'unknown',?,?,?,?,(SELECT COALESCE(MAX(position),0)+1 FROM accounts))",
-                                   (identifier, fingerprint, login, result, 'Session 手动导入；仅签到，失效后等待手动更新凭证', now, now, now))
+                connection.execute("INSERT INTO accounts(id,login_hash,login_enc,result_enc,validity,message,last_extracted,created,updated,note,position) VALUES (?,?,?,?,'unknown',?,?,?,?,?,(SELECT COALESCE(MAX(position),0)+1 FROM accounts))",
+                                   (identifier, fingerprint, login, result, 'Session 手动导入；仅签到，失效后等待手动更新凭证', now, now, now, item.note.strip()))
                 known[item.api_user] = identifier
                 identifiers.append(identifier)
                 added += 1

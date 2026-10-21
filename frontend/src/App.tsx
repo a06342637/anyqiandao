@@ -14,7 +14,7 @@ import SettingsPanel from './SettingsPanel';
 type Page = 'dashboard' | 'extract' | 'accounts' | 'schedules' | 'logs' | 'queue';
 const navigation = [
   { id: 'dashboard' as const, label: '仪表盘', icon: Gauge, description: '签到次数、新增余额和账号余额，按天 / 周 / 月统计。' },
-  { id: 'extract' as const, label: '凭证提取', icon: KeyRound, description: '添加新账号，依次登录并取回 session 与 api_user。' },
+  { id: 'extract' as const, label: '添加账号', icon: KeyRound, description: '添加 AnyRouter / AgentRouter 账号和备注，支持账密或 Session 导入。' },
   { id: 'accounts' as const, label: '账号列表', icon: Users, description: '检测凭证是否仍然有效，复制配置，或重新提取。' },
   { id: 'schedules' as const, label: '签到管理', icon: CalendarClock, description: '选择账号、设定间隔，按计划运行内置签到脚本。' },
   { id: 'logs' as const, label: '运行日志', icon: ListChecks, description: '每一次提取、检测和签到的结果都在这里；不记录密码与 Cookie。' },
@@ -164,11 +164,11 @@ export default function App() {
           <Stat icon={<Layers3 size={17} />} label="等待执行" value={dashboard?.jobs.pending} caption={dashboard?.paused ? '队列已暂停' : '全局并发 1 · 全部任务依次执行'} tone={dashboard?.paused ? 'warning-text' : ''} />
           <div className="stat-card"><div className="stat-label">下一次计划签到<CalendarClock size={17} /></div><div className="stat-value compact">{dashboard?.next_run ? formatTime(dashboard.next_run, timezone) : '尚未安排'}</div><span className="stat-caption">{dashboard?.next_run ? `时区 ${timezone}` : '在签到管理中创建计划'}</span></div>
         </div>}
-        {page === 'dashboard' && <DashboardPage timezone={timezone} onLogs={openLogs} />}
+        {page === 'dashboard' && <DashboardPage />}
         {page === 'extract' && <ExtractPage onQueue={() => setPage('queue')} onAccounts={() => setPage('accounts')} onSettings={() => setSettingsOpen(true)} dashboard={dashboard} />}
         {page === 'accounts' && <AccountsPage timezone={timezone} onExtract={() => setPage('extract')} onLogs={accountId => { setLogAccount(accountId); setLogJob(''); setPage('logs'); }} />}
         {page === 'schedules' && <SchedulesPage timezone={timezone} onLogs={() => { clearLogFilter(); setPage('logs'); }} />}
-        {page === 'logs' && <LogsPage timezone={timezone} jobId={logJob} accountId={logAccount} onClearFilter={clearLogFilter} />}
+        {page === 'logs' && <LogsPage timezone={timezone} jobId={logJob} accountId={logAccount} onClearFilter={clearLogFilter} onLogs={openLogs} />}
         {page === 'queue' && <QueuePage timezone={timezone} onLogs={openLogs} />}
         <footer className="footer"><span>{site.site_name} <b>v{__APP_VERSION__}</b></span><span><ShieldCheck size={13} /> AES-256-GCM 字段加密 · 私有部署</span></footer>
       </main>

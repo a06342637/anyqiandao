@@ -13,7 +13,7 @@ def amount(value):
     return round(float(value), 4)
 
 
-def checkin_statistics(store, span):
+def checkin_statistics(store, span, provider=None):
     settings = store.settings()
     zone = BEIJING
     now = datetime.now(zone)
@@ -21,9 +21,12 @@ def checkin_statistics(store, span):
     since, until = start.timestamp(), now.timestamp()
     with store.connection() as snapshot:
         snapshot.execute('BEGIN')
-        rows = [dict(row) for row in snapshot.execute('SELECT account_id,code,quota_before,quota_after,used_before,used_after,created,balance_source,reward_amount FROM checkins WHERE created>=? AND created<=? ORDER BY created,id', (since, until))]
-        accounts = [dict(row) for row in snapshot.execute('SELECT id,login_enc,quota,validity,checkin_status,last_checkin,note,checkin_state_enc,result_enc,provider FROM accounts ORDER BY position,created')]
-        latest = {row['account_id']: balance_view(row) for row in snapshot.execute('SELECT * FROM (SELECT account_id,code,quota_before,quota_after,used_before,used_after,created,balance_source,reward_amount,ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY created DESC,id DESC) AS ranking FROM checkins WHERE created<=?) WHERE ranking=1', (until,))}
+        account_scope = ' WHERE provider=?' if provider else ''
+        provider_values = (provider,) if provider else ()
+        checkin_scope = ' AND account_id IN (SELECT id FROM accounts WHERE provider=?)' if provider else ''
+        rows = [dict(row) for row in snapshot.execute('SELECT account_id,code,quota_before,quota_after,used_before,used_after,created,balance_source,reward_amount FROM checkins WHERE created>=? AND created<=?' + checkin_scope + ' ORDER BY created,id', (since, until, *provider_values))]
+        accounts = [dict(row) for row in snapshot.execute('SELECT id,login_enc,quota,validity,checkin_status,last_checkin,note,checkin_state_enc,result_enc,provider FROM accounts' + account_scope + ' ORDER BY position,created', provider_values)]
+        latest = {row['account_id']: balance_view(row) for row in snapshot.execute('SELECT * FROM (SELECT account_id,code,quota_before,quota_after,used_before,used_after,created,balance_source,reward_amount,ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY created DESC,id DESC) AS ranking FROM checkins WHERE created<=?' + checkin_scope + ') WHERE ranking=1', (until, *provider_values))}
     totals = counters()
     series = {}
     cursor = start
@@ -57,7 +60,7 @@ def checkin_statistics(store, span):
     for bucket in series.values():
         bucket['earned'] = amount(bucket['earned'])
     known_balances = [Decimal(str(account['quota'])) for account in accounts if account['quota'] is not None]
-    return {'range': span, 'since': since, 'until': until, 'timezone': zone.key, 'attempts': len(rows), **totals, 'earned': amount(totals['earned']),
+    return {'range': span, 'provider': provider, 'since': since, 'until': until, 'timezone': zone.key, 'attempts': len(rows), **totals, 'earned': amount(totals['earned']),
             'balance_total': amount(sum(known_balances)), 'balance_accounts': len(known_balances), 'accounts_total': len(accounts),
             'series': list(series.values()), 'accounts': table, 'stats_retention_days': settings.stats_retention_days,
             'legacy_records': legacy_records, 'unmeasured': unmeasured}

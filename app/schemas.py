@@ -22,6 +22,7 @@ class AdminPasswordInput(StrictModel):
 
 class AccountInput(StrictModel):
     provider: Provider = 'anyrouter'
+    note: str = Field(default='', max_length=500)
     username: str = Field(min_length=1, max_length=512)
     password: str = Field(min_length=1, max_length=4096)
     row_id: str = Field(min_length=1, max_length=100)
@@ -66,6 +67,7 @@ class CredentialPair(StrictModel):
 
 class CredentialInput(CredentialPair):
     username: str = Field(default='', max_length=512)
+    note: str = Field(default='', max_length=500)
 
 
 class CredentialImport(StrictModel):

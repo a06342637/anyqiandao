@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from app.config import VERSION
 from app.db import SCHEMA_VERSION
 from app.checkin_state import BEIJING, beijing_day
-from app.providers import account_fingerprint
+from app.providers import Provider, account_fingerprint
 from app.schemas import AccountEdit, ActionInput, CheckinConfirmationInput, ImportInput, QueueSettings, Reorder, RuntimeSettings, Selection
 from app.statistics import checkin_statistics
 
@@ -117,8 +117,8 @@ def account_router(store, auth, engine):
                 account_id = uuid.uuid4().hex
                 login_enc = store.vault.seal({'username': item.username, 'password': item.password}, f'login:{account_id}')
                 now = time.time()
-                connection.execute('INSERT INTO accounts(id,login_hash,login_enc,created,updated,provider,position) VALUES (?,?,?,?,?,?,(SELECT COALESCE(MAX(position),0)+1 FROM accounts))',
-                                   (account_id, fingerprint, login_enc, now, now, item.provider))
+                connection.execute('INSERT INTO accounts(id,login_hash,login_enc,created,updated,provider,note,position) VALUES (?,?,?,?,?,?,?,(SELECT COALESCE(MAX(position),0)+1 FROM accounts))',
+                                   (account_id, fingerprint, login_enc, now, now, item.provider, item.note.strip()))
                 job_id, inserted = store.enqueue('extract', account_id, source='import', payload={'password': item.password},
                                             dedupe_key=dedupe, connection=connection)
                 queued += int(inserted)
@@ -409,10 +409,10 @@ def account_router(store, auth, engine):
         return {'items': rows}
 
     @router.get('/stats')
-    def stats(range: str = Query('day')):
+    def stats(range: str = Query('day'), provider: Provider | None = None):
         if range not in ('day', 'week', 'month'):
             raise HTTPException(400, '统计范围只支持 day / week / month')
-        return checkin_statistics(store, range)
+        return checkin_statistics(store, range, provider)
 
     @router.get('/logs')
     def logs(page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100), kind: str | None = None, category: str | None = None,
