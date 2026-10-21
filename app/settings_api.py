@@ -1,6 +1,7 @@
 import time
 import uuid
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -10,6 +11,7 @@ from app.proxy import parse_proxy
 from app.schemas import AccountCheckinRoute, BrandingSettings, OperationRoutes, ProxyImport, ProxyInput, ProxyTrust, RuntimeSettings, ScheduleInput, Selection
 from app.network_routes import validate_route
 from app.random_schedule import plan_window
+from app.checkin_state import BEIJING
 
 
 def settings_router(store, auth):
@@ -245,14 +247,29 @@ def settings_router(store, auth):
 
     @router.get('/schedules/{schedule_id}/assignments')
     def schedule_assignments(schedule_id: str, page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100)):
-        if not store.one('SELECT id FROM schedules WHERE id=?', (schedule_id,)):
-            raise HTTPException(404, '签到计划不存在')
-        rows = store.all("SELECT d.*,a.login_enc,a.provider,j.status AS job_status FROM schedule_dispatches d JOIN accounts a ON a.id=d.account_id LEFT JOIN jobs j ON j.id=d.job_id WHERE d.schedule_id=? AND d.expires_at>? ORDER BY d.day,d.due_at LIMIT ? OFFSET ?",
-                         (schedule_id, time.time()-86400, limit, (page-1)*limit))
+        now = time.time()
+        today = datetime.fromtimestamp(now, BEIJING).date().isoformat()
+        with store.transaction() as connection:
+            schedule = connection.execute('SELECT * FROM schedules WHERE id=?', (schedule_id,)).fetchone()
+            if not schedule:
+                raise HTTPException(404, '签到计划不存在')
+            if schedule['enabled'] and schedule['mode'] == 'random_window':
+                plan_window(connection, schedule, now)
+            members = ' JOIN schedule_accounts m ON m.schedule_id=d.schedule_id AND m.account_id=d.account_id '
+            active = connection.execute("SELECT MIN(d.day) FROM schedule_dispatches d" + members +
+                "LEFT JOIN jobs j ON j.id=d.job_id WHERE d.schedule_id=? AND d.day>=? "
+                "AND ((d.status='planned' AND d.expires_at>?) OR (d.status='queued' AND j.status IN ('pending','running')))",
+                (schedule_id, today, now)).fetchone()[0]
+            day = active or connection.execute('SELECT MAX(d.day) FROM schedule_dispatches d' + members +
+                'WHERE d.schedule_id=? AND d.day>=?', (schedule_id, today)).fetchone()[0]
+            rows = connection.execute("SELECT d.*,a.login_enc,a.provider,j.status AS job_status FROM schedule_dispatches d" + members +
+                "JOIN accounts a ON a.id=d.account_id LEFT JOIN jobs j ON j.id=d.job_id WHERE d.schedule_id=? AND d.day=? "
+                "ORDER BY d.due_at,d.account_id LIMIT ? OFFSET ?", (schedule_id, day, limit, (page-1)*limit)).fetchall()
+            total = connection.execute('SELECT COUNT(*) FROM schedule_dispatches d' + members +
+                'WHERE d.schedule_id=? AND d.day=?', (schedule_id, day)).fetchone()[0]
         items = [{'account_id': r['account_id'], 'username': store.vault.open(r['login_enc'], f'login:{r["account_id"]}')['username'],
                   'provider': r['provider'], 'day': r['day'], 'due_at': r['due_at'], 'status': r['job_status'] or r['status']} for r in rows]
-        total = store.one('SELECT COUNT(*) n FROM schedule_dispatches WHERE schedule_id=? AND expires_at>?', (schedule_id, time.time()-86400))['n']
-        return {'items': items, 'total': total, 'page': page, 'limit': limit}
+        return {'items': items, 'total': total, 'page': page, 'limit': limit, 'day': day, 'next_day': bool(day and day > today)}
 
     @router.post('/schedules')
     def create_schedule(payload: ScheduleInput):

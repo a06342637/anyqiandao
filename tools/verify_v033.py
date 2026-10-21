@@ -166,7 +166,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
         return {'code': 'uncertain', 'receipt_code': 'accepted', 'verified_gain': 0,
                 'message': '接口未确认新增额度', 'quota': 35, 'quota_before': 35, 'quota_after': 35, 'logs': []}
 
-    async def test_repeat_receipt_uses_confirmed_reward_without_double_counting(self):
+    async def test_repeat_receipt_does_not_use_past_reward_as_current_confirmation(self):
         identifier = account(self.store)
         self.store.execute('UPDATE accounts SET last_extracted=? WHERE id=?', (time.time() - 60, identifier))
         self.store.record_checkin(identifier, None, 'signed', 10, 35)
@@ -174,12 +174,11 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
         first = await self.perform(identifier)
         second = await self.perform(identifier)
         stats = (await self.client.get('/api/v1/stats')).json()
-        self.assertEqual((first['status'], second['status']), ('already_signed', 'already_signed'))
-        self.assertEqual((stats['signed'], stats['already'], stats['earned']), (1, 2, 25))
-        self.assertEqual(self.service.checkins, 1)
+        self.assertEqual((first['status'], second['status']), ('uncertain', 'uncertain'))
+        self.assertEqual((stats['signed'], stats['uncertain'], stats['earned']), (1, 2, 25))
+        self.assertEqual(self.service.checkins, 2)
+        self.assertIsNone(self.store.checkin_balance(job_id=first['id'])['earned'])
         self.assertIsNone(self.store.checkin_balance(job_id=second['id'])['earned'])
-        logs = self.store.all('SELECT message FROM logs WHERE job_id=?', (second['id'],))
-        self.assertTrue(any('今日签到依据' in row['message'] for row in logs))
 
     async def test_zero_gain_and_unverified_history_do_not_prove_a_repeat(self):
         for code, source, before, after in [('signed', 'live', 35, 35), ('signed', 'legacy', 10, 35), ('uncertain', 'live', 10, 35)]:

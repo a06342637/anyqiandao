@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { CalendarClock, Clock3, FileText, Pause, Pencil, Play, Plus, ShieldCheck, Sparkles, Trash2, Users } from 'lucide-react';
 import { api, formatTime, refreshData, useResource } from './api';
-import { Badge, Button, EmptyState, ErrorNotice, Modal, Pagination, RefreshButton, useConfirm, usePageClamp, usePageSize, useToast, useTrack } from './ui';
+import { Badge, Button, EmptyState, ErrorNotice, LoadingState, Modal, Pagination, RefreshButton, useConfirm, usePageClamp, usePageSize, useToast, useTrack } from './ui';
 import { AccountPicker } from './selection';
 import { AccountCheckinRouting, RouteSelect } from './NetworkRouting';
 import type { NetworkRoute, PageData, ProxyOption, Schedule, Selection } from './types';
@@ -66,6 +66,13 @@ function ScheduleEditor({ schedule, onClose }: { schedule: Schedule | null; onCl
 
 function RandomAssignments({ schedule, onClose }: { schedule: Schedule; onClose: () => void }) {
   const [page, setPage] = useState(1);
-  const { data, error, reload } = useResource<PageData<{ account_id: string; username: string; provider: string; day: string; due_at: number; status: string }>>('/schedules/' + schedule.id + '/assignments?page=' + page + '&limit=20');
-  return <Modal title={schedule.name + ' · 随机安排'} subtitle="北京时间；到点进入串行队列，实际开始时间受资源与前序任务影响。窗口结束后未开始的任务取消，不集中补发。" onClose={onClose} wide><ErrorNotice message={error} retry={reload} /><div className="job-list">{data?.items.map(item => <div className="job-row" key={item.day + item.account_id}><div className="job-description"><strong>{item.username}</strong><p>{item.provider === 'agentrouter' ? 'AgentRouter' : 'AnyRouter'} · {item.day}</p></div><span>{formatTime(item.due_at, 'Asia/Shanghai')}</span><Badge status={item.status} /></div>)}</div>{data && <Pagination page={page} total={data.total} limit={20} onChange={setPage} />}</Modal>;
+  const shownDay = useRef<string | null>(null);
+  const { data, error, reload } = useResource<PageData<{ account_id: string; username: string; provider: string; day: string; due_at: number; status: string }> & { day: string | null; next_day: boolean }>('/schedules/' + schedule.id + '/assignments?page=' + page + '&limit=20');
+  usePageClamp(page, data?.total, 20, setPage);
+  useEffect(() => {
+    if (!data?.day) return;
+    if (shownDay.current && shownDay.current !== data.day) setPage(1);
+    shownDay.current = data.day;
+  }, [data?.day]);
+  return <Modal title={schedule.name + ' · 随机安排'} subtitle="北京时间；到点进入串行队列，实际开始时间受资源与前序任务影响。窗口结束后未开始的任务取消，不集中补发。" onClose={onClose} wide><ErrorNotice message={error} retry={reload} />{data?.day && <div className="random-assignment-heading"><strong>{data.next_day ? '下一天的随机安排' : '本日随机安排'} · {data.day}</strong>{data.next_day && <span>本日安排已结束，显示下一次签到时间</span>}</div>}{!data ? !error && <LoadingState label="正在读取随机安排" /> : !data.items.length ? <EmptyState title="暂无随机安排" description="启用计划并选择账号后，将显示每个账号的执行时间。" /> : <div className="job-list">{data.items.map(item => <div className="job-row" key={item.day + item.account_id}><div className="job-description"><strong>{item.username}</strong><p>{item.provider === 'agentrouter' ? 'AgentRouter' : 'AnyRouter'} · {item.day}</p></div><span>{formatTime(item.due_at, 'Asia/Shanghai')}</span><Badge status={item.status} /></div>)} </div>}{data && <Pagination page={page} total={data.total} limit={20} onChange={setPage} />}</Modal>;
 }

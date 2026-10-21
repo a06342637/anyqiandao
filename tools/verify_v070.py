@@ -175,7 +175,8 @@ class RandomScheduleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(self.start <= row['due_at'] < self.end for row in slots))
         self.assertGreater(slots[-1]['due_at']-slots[0]['due_at'], (self.end-self.start)*0.8)
         Store(self.config.data_dir, Vault(self.config.key))
-        await self.client.get(f'/api/v1/schedules/{self.schedule}/assignments')
+        with patch('app.settings_api.time.time', return_value=self.now):
+            await self.client.get(f'/api/v1/schedules/{self.schedule}/assignments')
         self.engine.tick_schedules(self.start)
         self.assertEqual(self.slots(), slots)
 

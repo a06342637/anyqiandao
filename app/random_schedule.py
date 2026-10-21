@@ -19,6 +19,16 @@ def plan_window(connection, schedule, now, *, replan=False, rng=None):
     if now >= end - 1:
         today += timedelta(days=1)
         start, end = bounds(schedule, today)
+    elif connection.execute(
+            "SELECT SUM(d.account_id IS NULL OR d.status='planned' OR "
+            "(d.status='queued' AND (j.status IN ('pending','running') OR (? AND j.status='cancelled' AND j.started IS NULL)))) AS unfinished "
+            "FROM schedule_accounts a LEFT JOIN schedule_dispatches d ON d.schedule_id=a.schedule_id "
+            "AND d.account_id=a.account_id AND d.day=? LEFT JOIN jobs j ON j.id=d.job_id WHERE a.schedule_id=?",
+            (int(replan), today.isoformat(), schedule['id'])).fetchone()['unfinished'] == 0:
+        # Once every member's daily attempt has ended, persist tomorrow's slots
+        # even if today's window is still open. Never enqueue them before due_at.
+        today += timedelta(days=1)
+        start, end = bounds(schedule, today)
     day = today.isoformat()
     connection.execute("UPDATE schedule_dispatches SET status='missed' WHERE schedule_id=? AND status='planned' AND expires_at<=?", (schedule['id'], now))
     if replan:
