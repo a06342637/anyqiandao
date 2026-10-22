@@ -258,7 +258,8 @@ def backup_router(store, auth):
                 existing_checkins.add(key)
                 connection.execute('INSERT INTO checkins(account_id,job_id,code,quota_before,quota_after,used_before,used_after,created,balance_source,reward_amount) VALUES (?,?,?,?,?,?,?,?,?,?)',
                                    (key[0], None, str(item.get('code') or 'signed')[:40], item.get('quota_before'), item.get('quota_after'),
-                                    item.get('used_before'), item.get('used_after'), float(item['created']), 'live' if item.get('balance_source') == 'live' else 'legacy', item.get('reward_amount')))
+                                    item.get('used_before'), item.get('used_after'), float(item['created']),
+                                    'live' if item.get('balance_source') == 'live' and not (identity[0] == 'agentrouter' and document.get('schema_version', 0) < 13) else 'legacy', item.get('reward_amount')))
                 summary['checkins'] += 1
             if restored_settings:
                 current = connection.execute("SELECT value FROM meta WHERE key='settings'").fetchone()['value']

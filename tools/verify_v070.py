@@ -122,11 +122,12 @@ class AgentProtocolTests(unittest.IsolatedAsyncioTestCase):
             async def cookies(self): return {'session': 'synthetic-agent-session'}
             async def api(self, path, **options):
                 calls.append((path, options.get('method', 'GET')))
-                profile = {'id': 42, 'quota': 0 if path.endswith('login') else 87500000, 'used_quota': 0}
+                self.readings = getattr(self, 'readings', 0) + (path.endswith('self'))
+                profile = {'id': 42, 'quota': 87500000 if self.readings >= 2 else 0, 'used_quota': 0}
                 return 200, json.dumps({'success': True, 'data': profile})
         with patch('app.router_service.BrowserSession', return_value=Session()):
             result = await RouterService().agent_login_checkin('synthetic', 'synthetic', None, RuntimeSettings())
-        self.assertEqual(calls, [('/api/user/login', 'POST'), ('/api/user/self', 'GET')])
+        self.assertEqual(calls, [('/api/user/login', 'POST'), ('/api/user/self', 'GET'), ('/api/user/self', 'GET')])
         self.assertEqual(result['checkin_result']['reward_amount'], 175)
 
     async def test_agent_background_self_is_blocked_until_explicit_probe(self):

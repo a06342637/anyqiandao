@@ -14,7 +14,7 @@ import { clearUpdateTracking, readUpdateSnapshot, rememberUpdateView, restoreUpd
 
 type Page = 'dashboard' | 'extract' | 'accounts' | 'schedules' | 'logs' | 'queue';
 const navigation = [
-  { id: 'dashboard' as const, label: '仪表盘', icon: Gauge, description: '签到次数、新增余额和账号余额，按天 / 周 / 月统计。' },
+  { id: 'dashboard' as const, label: '仪表盘', icon: Gauge, description: '签到次数和本次新增金额，按天 / 周 / 月统计。' },
   { id: 'extract' as const, label: '添加账号', icon: KeyRound, description: '添加 AnyRouter / AgentRouter 账号和备注，支持账密或 Session 导入。' },
   { id: 'accounts' as const, label: '账号列表', icon: Users, description: '检测凭证是否仍然有效，复制配置，或重新提取。' },
   { id: 'schedules' as const, label: '签到管理', icon: CalendarClock, description: '选择账号、设定间隔，按计划运行内置签到脚本。' },

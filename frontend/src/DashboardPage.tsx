@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Coins, Gauge, ShieldCheck, TrendingUp, Trophy } from 'lucide-react';
+import { CircleHelp, Coins, Gauge, ShieldCheck, TrendingUp } from 'lucide-react';
 import { useResource } from './api';
 import { ErrorNotice, RefreshButton } from './ui';
 import type { Provider, Stats } from './types';
@@ -24,12 +24,12 @@ function ProviderStatistics({ provider }: { provider: Provider }) {
         <div className="panel-tools"><div className="segmented inline" role="group" aria-label={`${platform} 统计范围`}>{RANGES.map(item => <button type="button" key={item.id} aria-pressed={range === item.id} className={range === item.id ? 'selected' : ''} onClick={() => setRange(item.id)}>{item.label}</button>)}</div><RefreshButton onClick={reload} label={`${platform} 统计已刷新`} /></div></div>
       <ErrorNotice message={error} retry={reload} />
       <div className="metric-grid">
-        <Metric icon={<Coins size={17} />} label={`${label}新增余额`} value={money(data?.earned, 4)} caption="按本轮实际核验到账金额累计" tone="success-text" />
+        <Metric icon={<Coins size={17} />} label={`${label}签到新增`} value={money(data?.earned, 4)} caption="仅累计签到前后核实的新增金额" tone="success-text" />
         <Metric icon={<TrendingUp size={17} />} label={`${label}签到次数`} value={data ? `${data.signed}` : '—'} caption={data ? `成功 ${data.signed} · 未到账 ${data.no_credit} · 失败 ${data.failed} · 人工确认 ${data.manual}` : '含自动与手动签到'} />
         <Metric icon={<ShieldCheck size={17} />} label="到账成功率" value={successRate === null ? '—' : `${successRate}%`} caption={data ? `${data.attempts} 次尝试${data.uncertain ? ` · ${data.uncertain} 次待确认` : ''}` : '按尝试次数计算'} tone={successRate !== null && successRate < 80 ? 'warning-text' : ''} />
-        <Metric icon={<Trophy size={17} />} label="账号总余额" value={money(data?.balance_total)} caption={data ? `${data.balance_accounts} / ${data.accounts_total} 个账号有余额数据` : '以最近一次成功读取为准'} />
+        <Metric icon={<CircleHelp size={17} />} label="待确认次数" value={data ? `${data.uncertain + data.unmeasured}` : '—'} caption="金额未核实，暂不计入签到新增" />
       </div>
-      {!!data?.legacy_records && <p className="stats-note">本区间含 {data.legacy_records} 条旧版记录，其余额差来自历史缓存，保留次数但不混入实时确认的新增余额。</p>}
+      {!!data?.legacy_records && <p className="stats-note">本区间含 {data.legacy_records} 条旧版记录，其签到前余额无法核实，保留历史和次数，金额不计入签到新增。</p>}
       {!!data?.unmeasured && <p className="stats-note">有 {data.unmeasured} 次签到成功但余额未完整读取，金额暂不计入，不会重复发起签到。</p>}
       <p className="stats-note">统计按北京时间划日，领取资格由网站决定。只有本轮余额变化加回期间消耗后核实到账，才计为成功；历史到账和人工确认不代替本轮结果。</p>
       {!!data?.no_credit && <p className="stats-note warning-text">有 {data.no_credit} 次请求已完成但没有到账，未计入成功；可以在账号列表筛选并重新核验。</p>}

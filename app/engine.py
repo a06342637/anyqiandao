@@ -465,10 +465,7 @@ class Engine:
             now = time.time()
             before, after = result.get('quota_before'), result.get('quota_after')
             message = result['message']
-            if before is not None and after is not None:
-                message += f'；签到前 ${before:.4f} → 签到后 ${after:.4f}，变化 {after - before:+.4f}'
-            elif result['code'] in ('signed', 'already_signed'):
-                message += '；余额未完整读取，新增金额暂不计入统计'
+            message += '；' + self.checkin_summary(result)
             self.complete_account(job, "UPDATE accounts SET validity='valid',message=?,last_validated=?,last_checkin=?,checkin_status=?,quota=COALESCE(?,quota),proxy_id=?,updated=? WHERE id=?",
                 (result['message'], now, now, result['code'], result.get('quota'), proxy_id, now, account['id']), result['code'], message,
                 balance=(before, after), usage=(result.get('used_before'), result.get('used_after')), reward_amount=result.get('reward_amount'))
@@ -542,12 +539,34 @@ class Engine:
             if result['code'] == 'already_signed':
                 result = {**result, 'code': 'no_credit' if gain == 0 else 'uncertain', 'reward_amount': None,
                           'message': '网站提示已领取，但本轮没有核实到账；未计为成功'}
+            if result['code'] == 'signed':
+                result = {**result, 'reward_amount': 25.0 if account.get('provider', 'anyrouter') == 'anyrouter' else gain}
             self.store.observe_account(account['id'], identity, result.get('quota_before'), result.get('used_before'), at=before_at)
             self.store.observe_account(account['id'], identity, result.get('quota_after'), result.get('used_after'), at=after_at,
                                        confirm=result['code'] == 'signed' and same_day,
                                        evidence='balance_credit' if account.get('provider') == 'agentrouter' else 'balance_25')
         # Never turn this attempt's missing credit into success using an earlier reward.
         return result
+
+    @staticmethod
+    def checkin_summary(result):
+        def money(value):
+            return f'${value:.4f}' if value is not None else '未读取'
+        before, after = result.get('quota_before'), result.get('quota_after')
+        summary = f'签到前 {money(before)} → 签到后 {money(after)}'
+        gain = balance_credit({'quota': before, 'used_quota': result.get('used_before')},
+                              {'quota': after, 'used_quota': result.get('used_after')})
+        if result['code'] == 'signed' and gain is not None:
+            reward = min(max(0, gain), result.get('reward_amount') if result.get('reward_amount') is not None else max(0, gain))
+            summary += f'；本次新增 +${reward:.4f}'
+            usage = (result.get('used_after') or 0) - (result.get('used_before') or 0)
+            if usage > 0:
+                summary += f'（已加回期间消耗 ${usage:.4f}）'
+        elif result['code'] in ('no_credit', 'already_signed', 'manual_confirmed'):
+            summary += '；本次计入新增 +$0.0000'
+        else:
+            summary += '；本次新增未确认，不计入统计'
+        return summary
 
     async def perform_agentrouter(self, job, account, password, settings):
         if not password:
@@ -571,7 +590,8 @@ class Engine:
         operation = 'checkin' if job['kind'] == 'checkin' else job.get('_route_operation', 'extract')
         self.log_job(job, 'AgentRouter 使用保存的账号密码在新会话登录，查询用户信息触发自动签到')
         credentials, proxy_id = await self.routed(job, account, operation, settings,
-            lambda active_route: self.service.agent_login_checkin(account['login']['username'], password, active_route, settings, on_submit=submitted))
+            lambda active_route: self.service.agent_login_checkin(account['login']['username'], password, active_route, settings,
+                on_submit=submitted, before_credentials=account['result']))
         result = credentials.pop('checkin_result')
         now = time.time()
         self.store.execute("UPDATE accounts SET result_enc=?,validity='valid',last_extracted=?,last_validated=?,quota=COALESCE(?,quota),updated=? WHERE id=?",
@@ -581,7 +601,7 @@ class Engine:
         if result['code'] in ('signed', 'no_credit') and job.get('_submission_at'):
             self.store.clear_rejected_submission(account['id'], job['_submission_at'])
         status = 'success' if job['kind'] == 'extract' else result['code']
-        message = ('AgentRouter 凭证提取完成；' if job['kind'] == 'extract' else '') + result['message']
+        message = ('AgentRouter 凭证提取完成；' if job['kind'] == 'extract' else '') + result['message'] + '；' + self.checkin_summary(result)
         self.complete_account(job, "UPDATE accounts SET message=?,last_checkin=?,checkin_status=?,quota=COALESCE(?,quota),proxy_id=?,updated=? WHERE id=?",
             (result['message'], now, result['code'], result.get('quota'), proxy_id, now, account['id']), status, message,
             balance=(result.get('quota_before'), result.get('quota_after')), usage=(result.get('used_before'), result.get('used_after')),
@@ -622,7 +642,7 @@ class Engine:
         if account.get('provider') == 'agentrouter':
             credentials, proxy_id = await self.routed(job, account, 'refresh', settings,
                 lambda active_route: self.service.agent_login_checkin(account['login']['username'], password, active_route, settings,
-                    on_submit=lambda: job.update(_checkin_submitted=True)))
+                    on_submit=lambda: job.update(_checkin_submitted=True), before_credentials=account['result']))
             agent_result = credentials.pop('checkin_result')
         else:
             credentials, proxy_id = await self.routed(job, account, 'refresh', settings, lambda active_route: self.service.extract(account['login']['username'], password, active_route, settings))
@@ -637,7 +657,9 @@ class Engine:
             self.store.record_checkin(account['id'], job['id'], result['code'], result.get('quota_before'), result.get('quota_after'),
                                       used_before=result.get('used_before'), used_after=result.get('used_after'), reward_amount=result.get('reward_amount'))
             self.store.execute('UPDATE accounts SET last_checkin=?,checkin_status=? WHERE id=?', (now, result['code'], account['id']))
-            self.log_job(job, result['message'], kind='script')
+            self.log_job(job, result['message'] + '；' + self.checkin_summary(result), kind='script')
+            for line in result.get('logs', []):
+                self.log_job(job, line, kind='script')
         self.log_job(job, f'自动重新提取成功，继续执行原{operation}任务', kind='extract', category='invalid')
 
     def complete_account(self, job, query, values, status, message, balance=None, usage=(None, None), reward_amount=None, record_code=None):

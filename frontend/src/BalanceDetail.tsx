@@ -9,7 +9,7 @@ export default function BalanceDetail({ balance, compact = false }: { balance: C
   return <div className={`balance-detail${compact ? ' compact' : ''}`} aria-label={compact ? '最近签到新增' : '最近签到余额变化'}>
     {!compact && <div className="balance-pair"><span>签到前<b>{money(balance.quota_before)}</b></span><span className="balance-arrow">→</span><span>签到后<b>{money(balance.quota_after)}</b></span></div>}
     {confirmed ? <span className={`balance-gain ${balance.earned! > 0 ? 'positive' : ''}`}>签到新增 +{money(balance.earned)}{!compact && balance.delta !== null && balance.delta < 0 ? ' · 含期间消耗' : ''}</span>
-      : !measured ? <span className="balance-hint">历史记录 · 旧余额差不计入新增</span>
+      : !measured ? <span className="balance-hint">历史记录 · 前余额未核实，不计入新增</span>
       : balance.code === 'no_credit' ? <span className="balance-hint">本次未到账 · 未计为成功</span>
       : balance.code === 'already_signed' ? <span className="balance-hint">本次已签过 · 不重复计入新增</span>
       : balance.code === 'manual_confirmed' ? <span className="balance-hint">已人工确认 · 未新增奖励</span>

@@ -322,8 +322,20 @@ class RouterService:
         async with self.signed_in(credentials, route, settings) as session:
             return await read_console(session, credentials, settings, options)
 
-    async def agent_login_checkin(self, username, password, route, settings, *, on_submit=None):
+    async def agent_login_checkin(self, username, password, route, settings, *, on_submit=None, before_credentials=None):
         """AgentRouter uses a fresh login and GET /user/self, not AnyRouter's POST."""
+        before, observed_before = None, None
+        logs = []
+        if before_credentials:
+            try:
+                async with self.signed_in(before_credentials, route, settings) as previous:
+                    status, text = await previous.api('/api/user/self', headers=api_headers(before_credentials))
+                    before = profile_result(status, text, before_credentials['api_user'])
+                    observed_before = time.time()
+                    if quota_of(before) is None:
+                        before = None
+            except TaskError:
+                logs.append('登录前真实余额读取失败；不使用缓存余额或登录响应默认值计算新增')
         async with BrowserSession(route, settings, 'agentrouter') as session:
             await session.open('/login', time.monotonic() + settings.login_timeout)
             if await session.challenge_visible():
@@ -346,10 +358,18 @@ class RouterService:
             async def profile():
                 code, body = await session.api('/api/user/self', headers=api_headers(credentials))
                 return profile_result(code, body, credentials['api_user'])
-            before = login_profile if quota_of(login_profile) is not None else await profile()
-            observed_before = time.time()
+            # Login replies can contain default zero quota/usage fields. Prefer
+            # an actual user/self observation made before the fresh login. If
+            # credentials were absent/expired, the first post-login query only
+            # establishes a baseline and cannot prove credit received earlier.
+            if before is None or str(before.get('id')) != credentials['api_user']:
+                before = await profile()
+                observed_before = time.time()
+                logs.append('登录前余额未核实；首次查询仅建立余额基数，之前已发放的额度不计入本轮新增')
             after, observed_after, gain = {}, observed_before, None
-            logs = ['AgentRouter：全新隔离会话登录，再查询用户信息触发网站自动签到；不调用 AnyRouter 签到接口']
+            logs.append('AgentRouter：全新隔离会话登录；使用用户信息查询的真实前后余额，不使用登录响应中的默认余额')
+            if quota_of(before) is None:
+                logs.append('首次查询未返回有效余额，无法核实本轮新增；不会把账号总余额计入奖励')
             for attempt in range(3):
                 try:
                     after = await profile()
@@ -364,10 +384,10 @@ class RouterService:
                     await asyncio.sleep(1)
             signed = verified_reward('agentrouter', gain)
             code = 'signed' if signed else 'no_credit' if gain == 0 else 'uncertain'
-            message = f'AgentRouter 已核实本轮新增 ${gain:.4f}' if signed else 'AgentRouter 登录已完成，但本轮未核实新增额度，不计为签到成功'
+            message = f'AgentRouter 已核实本轮新增 ${gain:.4f}' if signed else 'AgentRouter 登录已完成，真实前后余额未核实新增额度，本轮不计入新增统计'
             quota_before, quota_after = quota_of(before), quota_of(after)
             if quota_before is not None and quota_after is not None:
-                logs.append(f'登录查询前余额 {quota_before:.6f} → 查询后 {quota_after:.6f}；加回期间消耗后新增 {gain}')
+                logs.append(f'签到前 ${quota_before:.4f} → 签到后 ${quota_after:.4f}；余额变化 ${quota_after - quota_before:+.4f}')
             result = {'code': code, 'message': message, 'quota': quota_after if quota_after is not None else quota_before,
                       'quota_before': quota_before, 'quota_after': quota_after, 'used_before': quota_of(before, 'used_quota'),
                       'used_after': quota_of(after, 'used_quota'), 'verified_gain': gain, 'reward_amount': gain if signed else None,

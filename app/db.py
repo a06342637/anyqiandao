@@ -7,26 +7,26 @@ from contextlib import contextmanager
 from decimal import Decimal
 
 from app.crypto import Vault
-from app.checkin_state import DailyCheckinState, observe_balance, confirmed_today, submitted_today, beijing_day
+from app.checkin_state import DailyCheckinState, observe_balance, confirmed_today, submitted_today, beijing_day, balance_credit, finite_amount
 from app.errors import TaskError
 from app.schemas import RuntimeSettings
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def checkin_earned(row):
     if row['code'] != 'signed' or row['balance_source'] != 'live':
         return None
-    if 'reward_amount' in row.keys() and row['reward_amount'] is not None:
-        return Decimal(str(row['reward_amount']))
-    if row['quota_before'] is None or row['quota_after'] is None:
+    gain = balance_credit({'quota': row['quota_before'], 'used_quota': row['used_before']},
+                          {'quota': row['quota_after'], 'used_quota': row['used_after']})
+    if gain is None:
         return None
-    gain = Decimal(str(row['quota_after'])) - Decimal(str(row['quota_before']))
-    if row['used_before'] is not None and row['used_after'] is not None:
-        if row['used_after'] < row['used_before']:
+    measured = max(Decimal(0), Decimal(str(gain)))
+    if 'reward_amount' in row.keys() and row['reward_amount'] is not None:
+        if not finite_amount(row['reward_amount']) or row['reward_amount'] < 0:
             return None
-        gain += Decimal(str(row['used_after'])) - Decimal(str(row['used_before']))
-    return max(Decimal(0), gain)
+        return min(measured, Decimal(str(row['reward_amount'])))
+    return measured
 
 
 def balance_view(row):
@@ -220,6 +220,12 @@ class Store:
                     CREATE INDEX IF NOT EXISTS schedule_dispatch_due ON schedule_dispatches(schedule_id,status,due_at);
                     PRAGMA user_version=12;
                 ''')
+            if version < 13:
+                # Earlier AgentRouter records used the login DTO as their
+                # baseline. Its zero defaults make the reward unverifiable.
+                # Retain history/counts but remove these amounts from earnings.
+                connection.execute("UPDATE checkins SET balance_source='legacy' WHERE account_id IN (SELECT id FROM accounts WHERE provider='agentrouter')")
+                connection.execute('PRAGMA user_version=13')
 
     @contextmanager
     def connection(self):
