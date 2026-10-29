@@ -206,6 +206,17 @@ def settings_router(store, auth):
         schedule['network_route'] = json.loads(schedule['network_route'])
         return schedule
 
+    @router.get('/schedules/{schedule_id}/accounts')
+    def schedule_accounts(schedule_id: str, page: int = Query(1, ge=1), limit: int = Query(10, ge=1, le=100)):
+        with store.transaction() as connection:
+            if not connection.execute('SELECT 1 FROM schedules WHERE id=?', (schedule_id,)).fetchone():
+                raise HTTPException(404, '签到计划不存在')
+            where = 'id IN (SELECT account_id FROM schedule_accounts WHERE schedule_id=?)'
+            count = connection.execute('SELECT COUNT(*) FROM accounts WHERE ' + where, (schedule_id,)).fetchone()[0]
+            rows = connection.execute('SELECT * FROM accounts WHERE ' + where + ' ORDER BY position,created,rowid LIMIT ? OFFSET ?',
+                                      (schedule_id, limit, (page - 1) * limit)).fetchall()
+        return {'items': store.account_summaries(rows), 'total': count, 'page': page, 'limit': limit}
+
     def save_schedule(payload, schedule_id=None):
         now = time.time()
         with store.transaction() as connection:

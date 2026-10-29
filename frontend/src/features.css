@@ -196,6 +196,9 @@
 .picker-row .badge { flex: none; }
 .account-picker > .form-hint { margin: 0; border-top: 1px solid var(--line); line-height: 1.7; }
 .account-picker .loading-state { padding: 28px 14px; }
+.selected-accounts { margin-top: 16px; }
+.selected-accounts .picker-identity small { overflow-wrap: anywhere; }
+.selected-accounts input[readonly] { pointer-events: none; }
 
 .modal.schedule-editor { padding: 0; height: min(880px, calc(100dvh - 48px)); display: flex; flex-direction: column; overflow: hidden; }
 .schedule-editor > .modal-heading { padding: 24px 24px 18px; margin: 0; border-bottom: 1px solid var(--line); flex: none; }

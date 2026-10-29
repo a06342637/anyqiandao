@@ -60,9 +60,18 @@ def account_router(store, auth, engine):
             raise HTTPException(400, '账号状态筛选无效') from None
         where, values = store.selection_where(selection)
         count = store.selection_count(selection)
-        rows = store.all('SELECT * FROM accounts WHERE ' + where + ' ORDER BY position,created,rowid LIMIT ? OFFSET ?',
+        rows = store.all('SELECT * FROM accounts WHERE ' + where + ' ORDER BY ' + store.account_order(selection.provider) + ' LIMIT ? OFFSET ?',
                          [*values, limit, (page - 1) * limit])
         return {'items': [store.public_account(row) for row in rows], 'total': count, 'page': page, 'limit': limit}
+
+    @router.post('/accounts/selection-preview')
+    def selection_preview(payload: Selection, page: int = Query(1, ge=1), limit: int = Query(10, ge=1, le=100)):
+        where, values = store.selection_where(payload)
+        with store.transaction() as connection:
+            count = store.selection_count(payload, connection=connection)
+            rows = connection.execute('SELECT * FROM accounts WHERE ' + where + ' ORDER BY ' + store.account_order(payload.provider) +
+                                      ' LIMIT ? OFFSET ?', [*values, limit, (page - 1) * limit]).fetchall()
+        return {'items': store.account_summaries(rows), 'total': count, 'page': page, 'limit': limit}
 
     @router.post('/accounts/{account_id}/checkin/confirm')
     def confirm_checkin(account_id: str, payload: CheckinConfirmationInput):
@@ -215,13 +224,15 @@ def account_router(store, auth, engine):
         # The given ids take the positions they occupied as a block, in the new order; everything else keeps its place.
         with store.transaction() as connection:
             wanted = set(payload.ids)
-            ordered = [row['id'] for row in connection.execute('SELECT id FROM accounts ORDER BY position,created,rowid')]
+            column = 'provider_position' if payload.provider else 'position'
+            where, values = (' WHERE provider=?', (payload.provider,)) if payload.provider else ('', ())
+            ordered = [row['id'] for row in connection.execute('SELECT id FROM accounts' + where + ' ORDER BY ' + store.account_order(payload.provider), values)]
             if len(wanted) != len(payload.ids) or not wanted.issubset(ordered):
-                raise HTTPException(400, '排序包含重复或不存在的账号，请刷新后重试')
+                raise HTTPException(400, '排序包含重复、不存在或不属于当前分类的账号，请刷新后重试')
             slots = [index for index, account_id in enumerate(ordered) if account_id in wanted]
             for slot, account_id in zip(slots, payload.ids):
                 ordered[slot] = account_id
-            connection.executemany('UPDATE accounts SET position=? WHERE id=?', enumerate(ordered, start=1))
+            connection.executemany(f'UPDATE accounts SET {column}=? WHERE id=?', enumerate(ordered, start=1))
         return {'ok': True}
 
     @router.get('/accounts/{account_id}/credentials')

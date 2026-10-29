@@ -11,7 +11,7 @@ from app.checkin_state import DailyCheckinState, observe_balance, confirmed_toda
 from app.errors import TaskError
 from app.schemas import RuntimeSettings
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 def checkin_earned(row):
@@ -226,6 +226,12 @@ class Store:
                 # Retain history/counts but remove these amounts from earnings.
                 connection.execute("UPDATE checkins SET balance_source='legacy' WHERE account_id IN (SELECT id FROM accounts WHERE provider='agentrouter')")
                 connection.execute('PRAGMA user_version=13')
+            if version < 14:
+                if 'provider_position' not in {row['name'] for row in connection.execute('PRAGMA table_info(accounts)')}:
+                    connection.execute('ALTER TABLE accounts ADD COLUMN provider_position INTEGER')
+                    connection.execute('UPDATE accounts SET provider_position=position')
+                connection.execute('CREATE INDEX IF NOT EXISTS accounts_provider_position ON accounts(provider,provider_position,created)')
+                connection.execute('PRAGMA user_version=14')
 
     @contextmanager
     def connection(self):
@@ -410,9 +416,17 @@ class Store:
             clauses.append("validity!='invalid'")
         return ' AND '.join(clauses) or '1', values
 
+    @staticmethod
+    def account_order(provider=None):
+        return 'provider_position IS NULL,provider_position,created,rowid' if provider else 'position,created,rowid'
+
+    def account_summaries(self, rows):
+        return [{'id': row['id'], 'username': self.vault.open(row['login_enc'], f'login:{row["id"]}')['username'],
+                 'provider': row['provider'], 'validity': row['validity'], 'note': row['note']} for row in rows]
+
     def iter_selected(self, connection, selection, *, columns='*', exportable=False):
         where, values = self.selection_where(selection, exportable=exportable)
-        cursor = connection.execute('SELECT ' + columns + ' FROM accounts WHERE ' + where + ' ORDER BY position,created,rowid', values)
+        cursor = connection.execute('SELECT ' + columns + ' FROM accounts WHERE ' + where + ' ORDER BY ' + self.account_order(selection.provider), values)
         while rows := cursor.fetchmany(100):
             yield from rows
 

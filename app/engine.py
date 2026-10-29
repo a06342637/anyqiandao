@@ -460,6 +460,9 @@ class Engine:
                 await self.refresh_for_checkin(job, account, password, route, settings, proxy_id)
                 result, proxy_id = await self.routed(job, account, 'checkin', settings, lambda active_route: self.checkin_or_observed(job, account, active_route, settings))
             result = self.resolve_checkin_receipt(account, result, settings)
+            result, proxy_id = await self.retry_no_credit(job, account, result, proxy_id, settings,
+                lambda: self.routed(job, account, 'checkin', settings,
+                    lambda active_route: self.checkin_or_observed(job, account, active_route, settings)))
             if result['code'] in ('signed', 'no_credit') and job.get('_submission_at'):
                 self.store.clear_rejected_submission(account['id'], job['_submission_at'])
             now = time.time()
@@ -471,6 +474,61 @@ class Engine:
                 balance=(before, after), usage=(result.get('used_before'), result.get('used_after')), reward_amount=result.get('reward_amount'))
             for line in result.get('logs', [])[:40]:
                 self.log_job(job, line, kind='script')
+
+    async def retry_no_credit(self, job, account, result, proxy_id, settings, retry):
+        """One extra round for verified zero credit; retain one final job/history entry."""
+        if result['code'] != 'no_credit':
+            return result, proxy_id
+        gain = balance_credit({'quota': result.get('quota_before'), 'used_quota': result.get('used_before')},
+                              {'quota': result.get('quota_after'), 'used_quota': result.get('used_after')})
+        if gain != 0:
+            return {**result, 'code': 'uncertain', 'reward_amount': None,
+                    'message': '本轮余额或消耗未完整确认，无法自动复签，请人工核验'}, proxy_id
+        for line in result.get('logs', [])[:40]:
+            self.log_job(job, line, kind='script')
+        message = '本轮未到账，自动再签到一轮确认；先重新查询余额，延迟到账即停止'
+        self.log_job(job, message)
+        self.store.execute('UPDATE jobs SET message=? WHERE id=?', (message, job['id']))
+
+        def reset_round():
+            if job.get('_submission_at'):
+                self.store.clear_rejected_submission(account['id'], job['_submission_at'])
+            for key in ('_submission_at', '_checkin_continuation', '_checkin_attempt_limit', '_checkin_attempt_offset'):
+                job.pop(key, None)
+            job['_checkin_submitted'] = False
+
+        reset_round()
+        try:
+            observed, proxy_id = await self.routed(job, account, 'checkin', settings,
+                lambda active_route: self.service.validate(account['result'], active_route, settings))
+        except (TaskError, httpx.TransportError, OSError):
+            return {**result, 'code': 'uncertain', 'reward_amount': None, 'logs': [],
+                    'message': '自动复签前余额查询失败，未再次提交，请人工核验'}, proxy_id
+        now = time.time()
+        quota, used = observed.get('quota'), quota_of(observed.get('profile') or {}, 'used_quota')
+        gain = balance_credit({'quota': result.get('quota_before'), 'used_quota': result.get('used_before')},
+                              {'quota': quota, 'used_quota': used})
+        same_day = all(beijing_day(result.get(key, now)) == beijing_day(now)
+                       for key in ('observed_before', 'observed_after', 'claimed_at'))
+        checked = {**result, 'quota': quota, 'quota_after': quota, 'used_after': used,
+                   'observed_after': now, 'logs': []}
+        if same_day and verified_reward(account.get('provider', 'anyrouter'), gain):
+            checked.update(code='signed', receipt_code='accepted', verified_gain=gain,
+                           message='自动复签前已核实延迟到账，停止再次签到')
+            return self.resolve_checkin_receipt(account, checked, settings), proxy_id
+        if gain != 0 or not same_day:
+            return {**checked, 'code': 'uncertain', 'reward_amount': None,
+                    'message': '自动复签前余额、消耗或日期变化无法确认，未再次提交'}, proxy_id
+        reset_round()
+        # Preserve the first round's baseline so AnyRouter also checks for a
+        # delayed credit between this read and the new browser's pre-submit read.
+        if account.get('provider', 'anyrouter') == 'anyrouter':
+            job['_checkin_continuation'] = {'observed_before': now, **result}
+        retried, proxy_id = await retry()
+        retried = self.resolve_checkin_receipt(account, retried, settings)
+        if retried['code'] == 'no_credit':
+            retried = {**retried, 'message': '已自动再签到一轮，仍未到账；请核对后确认。' + retried['message']}
+        return retried, proxy_id
 
     async def checkin_or_observed(self, job, account, route, settings):
         current = self.store.account(account['id'])
@@ -501,11 +559,11 @@ class Engine:
                                       {'quota': quota_of(profile), 'used_quota': quota_of(profile, 'used_quota')})
                 same_day = beijing_day(continuation['observed_before']) == beijing_day(observed_at)
                 if fixed_reward(gain) and same_day:
-                    return {**continuation, 'code': 'signed', 'message': '备用代理复核到直连后的延迟到账，已确认新增 $25；未再次提交',
+                    return {**continuation, 'code': 'signed', 'message': '再次签到前复核到延迟到账，已确认新增 $25；未再次提交',
                             'quota': quota_of(profile), 'quota_after': quota_of(profile), 'used_after': quota_of(profile, 'used_quota'),
                             'observed_after': observed_at, 'verified_gain': gain, 'reward_amount': 25, 'logs': []}
                 if gain != 0 or not same_day:
-                    return {**continuation, 'code': 'uncertain', 'message': '切换代理后余额变化或日期无法确认，未再次提交签到',
+                    return {**continuation, 'code': 'uncertain', 'message': '再次签到前余额变化或日期无法确认，未再次提交签到',
                             'quota': quota_of(profile), 'quota_after': quota_of(profile), 'used_after': quota_of(profile, 'used_quota'),
                             'observed_after': observed_at, 'logs': []}
             return self.checkin_precheck(account, quota_of(profile), quota_of(profile, 'used_quota'), observed_at)
@@ -589,17 +647,23 @@ class Engine:
                 job['_checkin_submitted'] = True
         operation = 'checkin' if job['kind'] == 'checkin' else job.get('_route_operation', 'extract')
         self.log_job(job, 'AgentRouter 使用保存的账号密码在新会话登录，查询用户信息触发自动签到')
-        credentials, proxy_id = await self.routed(job, account, operation, settings,
-            lambda active_route: self.service.agent_login_checkin(account['login']['username'], password, active_route, settings,
-                on_submit=submitted, before_credentials=account['result']))
-        result = credentials.pop('checkin_result')
-        now = time.time()
-        self.store.execute("UPDATE accounts SET result_enc=?,validity='valid',last_extracted=?,last_validated=?,quota=COALESCE(?,quota),updated=? WHERE id=?",
-            (self.store.vault.seal(credentials, f'result:{account["id"]}'), now, now, credentials.get('quota'), now, account['id']))
-        account.update(result=credentials)
+        async def login_round():
+            credentials, selected_proxy = await self.routed(job, account, operation, settings,
+                lambda active_route: self.service.agent_login_checkin(account['login']['username'], password, active_route, settings,
+                    on_submit=submitted, before_credentials=account['result']))
+            result = credentials.pop('checkin_result')
+            now = time.time()
+            self.store.execute("UPDATE accounts SET result_enc=?,validity='valid',last_extracted=?,last_validated=?,quota=COALESCE(?,quota),updated=? WHERE id=?",
+                (self.store.vault.seal(credentials, f'result:{account["id"]}'), now, now, credentials.get('quota'), now, account['id']))
+            account.update(result=credentials)
+            return result, selected_proxy
+        result, proxy_id = await login_round()
         result = self.resolve_checkin_receipt(account, result, settings)
+        if job['kind'] == 'checkin':
+            result, proxy_id = await self.retry_no_credit(job, account, result, proxy_id, settings, login_round)
         if result['code'] in ('signed', 'no_credit') and job.get('_submission_at'):
             self.store.clear_rejected_submission(account['id'], job['_submission_at'])
+        now = time.time()
         status = 'success' if job['kind'] == 'extract' else result['code']
         message = ('AgentRouter 凭证提取完成；' if job['kind'] == 'extract' else '') + result['message'] + '；' + self.checkin_summary(result)
         self.complete_account(job, "UPDATE accounts SET message=?,last_checkin=?,checkin_status=?,quota=COALESCE(?,quota),proxy_id=?,updated=? WHERE id=?",

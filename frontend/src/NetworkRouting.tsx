@@ -55,7 +55,7 @@ function CheckinFallbackRouting() {
     finally { setBusy(false); }
   };
   return <section className="settings-section"><h3><Network size={16} /> 签到备用代理</h3>
-    <p className="form-hint">签到使用直连时，前两次未到账或连接失败，第三次改用勾选的备用代理。切换后先查余额，已到账就停止；总共最多三次。勾选多个时轮流选用一个，未勾选则保持直连。</p>
+    <p className="form-hint">签到使用直连时，前两次未到账或连接失败，第三次改用勾选的备用代理。切换后先查余额，已到账就停止；每轮最多三次，整轮明确未到账时自动再执行一轮；仍未到账再提示确认。勾选多个时轮流选用一个，未勾选则保持直连。</p>
     <ErrorNotice message={settings.error || nodes.error} retry={settings.reload} />
     <div className="form-grid">{nodes.data?.items.map(proxy => <label className="check-label" key={proxy.id}><input type="checkbox" aria-label={`签到备用 ${proxy.name}`} checked={selected.includes(proxy.id)} disabled={busy || !proxy.enabled && !selected.includes(proxy.id)} onChange={event => setDraft(event.target.checked ? [...selected, proxy.id] : selected.filter(id => id !== proxy.id))} />{proxy.name} · {proxy.scheme}{!proxy.enabled ? '（已停用）' : ''}</label>)}</div>
     {nodes.data && !nodes.data.items.length && <p className="form-hint">尚无代理，添加并启用节点后可在这里勾选。</p>}

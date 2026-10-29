@@ -46,12 +46,12 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
   useEffect(() => { setOrder(null); setDragging(null); dragAccount.current = null; dragOrder.current = null; pointer.current = null; }, [page, limit, validity, onlyExtracted, needsConfirmation, provider]);
   const items = order ? order.map(id => data?.items.find(item => item.id === id)).filter((item): item is Account => !!item) : data?.items || [];
   const checkedPage = !!items.length && items.every(account => selection.selected(account.id));
-  const canSort = !validity && !onlyExtracted && !needsConfirmation && !provider && !busy;
+  const canSort = !!data && !error && !busy;
   const run = async (operation: () => Promise<void>) => { setBusy(true); try { await operation(); refreshData(); } catch (caught) { toast((caught as Error).message, 'error'); } finally { setBusy(false); } };
   const actionLabel = (kind: AccountAction) => ({ validate: repairInvalid ? '检测并修复' : '检测', balance: '检测余额', checkin: '签到', extract: '重新提取', extract_invalid: '仅重提失效' })[kind];
   const action = async (kind: AccountAction, account?: Account) => {
     const target = account ? `账号「${account.username}」` : `选中的 ${count} 个账号`;
-    if (kind === 'checkin' && !await confirm({ title: `为${target}签到一次？`, message: '按账号平台执行：AnyRouter 查询前后余额并提交签到，最多三次；AgentRouter 在新会话重新登录并查询用户信息。待确认账号会重新核验。有账密的账号可自动重新提取。Session 导入账号只签到，失效后保留并等待手动更新，不执行自动登录。', confirmLabel: '开始签到' })) return;
+    if (kind === 'checkin' && !await confirm({ title: `为${target}签到一次？`, message: '按账号平台执行：AnyRouter 查询前后余额并提交签到，每轮最多三次；AgentRouter 在新会话重新登录并查询用户信息。明确未到账时自动再签到一轮，仍未到账再提示确认。待确认账号会重新核验。有账密的账号可自动重新提取。Session 导入账号只签到，失效后保留并等待手动更新，不执行自动登录。', confirmLabel: '开始签到' })) return;
     if (kind === 'extract' && !account && count > 1 && !await confirm({ title: `重新提取所选 ${count} 个账号？`, message: '这会重新登录全部所选账号，包括凭证仍有效的账号。如果只需修复已失效 Cookie，请取消后选择“仅重提失效”。', confirmLabel: '全部重新提取' })) return;
     void run(async () => {
       const result = await api<ActionResult>('/accounts/actions', 'POST', { ...(account ? { ids: [account.id] } : selection.payload), action: kind, ...(kind === 'validate' ? { repair_invalid: repairInvalid } : {}), ...(kind === 'checkin' ? { retry_unconfirmed: true } : {}) });
@@ -133,7 +133,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
   const saveOrder = (next: string[] | null) => {
     if (!next || !data || next.join() === data.items.map(item => item.id).join()) { setOrder(null); return; }
     setOrder(next);
-    void run(async () => { await api('/accounts/reorder', 'POST', { ids: next }); await reload(); toast('排序已保存', 'success'); }).finally(() => setOrder(null));
+    void run(async () => { await api('/accounts/reorder', 'POST', { ids: next, provider: provider || null }); await reload(); toast(`${providerFilters.find(option => option.value === provider)?.label}排序已保存`, 'success'); }).finally(() => setOrder(null));
   };
   const finishDrag = (commit = false) => {
     const start = pointer.current, next = dragOrder.current;
@@ -155,7 +155,7 @@ export default function AccountsPage({ timezone, onExtract, onLogs }: { timezone
     [next[index], next[target]] = [next[target], next[index]]; saveOrder(next);
   };
 
-  return <section className="panel accounts-panel"><div className="panel-heading"><div className="heading-icon"><Users size={19} /></div><div><h2>账号列表 <span className="count-pill">{data ? total : '—'}</span></h2><p>账号、密码与凭证均加密保存，直到你主动删除{canSort ? '；拖动左侧把手可排序' : ''}</p></div><div className="panel-tools"><RefreshButton onClick={reload} label="账号列表已刷新" /><Button onClick={onExtract}><Plus size={16} />添加账号</Button></div></div>
+  return <section className="panel accounts-panel"><div className="panel-heading"><div className="heading-icon"><Users size={19} /></div><div><h2>账号列表 <span className="count-pill">{data ? total : '—'}</span></h2><p>账号、密码与凭证均加密保存，直到你主动删除{canSort ? '；拖动左侧把手排序，三个分类分别保存' : ''}</p></div><div className="panel-tools"><RefreshButton onClick={reload} label="账号列表已刷新" /><Button onClick={onExtract}><Plus size={16} />添加账号</Button></div></div>
     <div className="filter-bar account-filters">
       <div className="account-filter-scroll"><Filter size={16} aria-hidden="true" />
         <div className="account-filter-group" role="group" aria-label="筛选账号平台">{providerFilters.map(option => <button type="button" key={option.value} className={`account-filter-button ${provider === option.value ? 'selected' : ''}`} aria-pressed={provider === option.value} onClick={() => { if (provider === option.value) return; setProvider(option.value); setPage(1); selection.clear(); }}>{option.label}</button>)}</div>

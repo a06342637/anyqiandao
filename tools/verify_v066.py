@@ -98,17 +98,17 @@ class CheckinFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.posts, ['direct'])
         self.assertEqual(self.sessions, ['direct'])
 
-    async def test_no_selected_proxy_keeps_three_direct_attempts(self):
+    async def test_no_selected_proxy_keeps_three_direct_attempts_per_round(self):
         await self.proxy('unselected')
         self.browser(reward=None)
         self.assertEqual((await self.execute())['status'], 'no_credit')
-        self.assertEqual(self.posts, ['direct'] * 3)
+        self.assertEqual(self.posts, ['direct'] * 6)
 
-    async def test_zero_credit_on_proxy_stays_uncertain(self):
+    async def test_zero_credit_on_proxy_retries_one_round_then_stops(self):
         await self.configure(await self.proxy('no-credit'))
         self.browser(reward=None)
         job = await self.execute()
-        self.assertEqual((job['status'], len(self.posts)), ('no_credit', 3))
+        self.assertEqual((job['status'], len(self.posts)), ('no_credit', 6))
         self.assertIsNone(self.store.checkin_balance(job_id=job['id'])['earned'])
 
     async def test_multiple_checked_proxies_rotate_between_accounts(self):

@@ -22,6 +22,11 @@ class AssignmentRolloverTests(unittest.IsolatedAsyncioTestCase):
         self.store.execute('UPDATE jobs SET status=? WHERE account_id=?', (last_status, slots[-1]['account_id']))
 
     async def assignments(self, now, page=1, limit=20):
+        # The mocked next-day clock also affects auth.time; keep only this
+        # synthetic session valid for the simulated schedule observation.
+        self.store.execute('UPDATE sessions SET expires=?', (now + 86400,))
+        for cookie in self.client.cookies.jar:
+            cookie.expires = int(now + 86400)
         with patch('app.settings_api.time.time', return_value=now), patch('app.random_schedule.SystemRandom', return_value=random.Random(31)):
             response = await self.client.get(f'/api/v1/schedules/{self.schedule}/assignments?page={page}&limit={limit}')
         self.assertEqual(response.status_code, 200, response.text)

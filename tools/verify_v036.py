@@ -200,8 +200,8 @@ class CheckinPreflightTests(unittest.IsolatedAsyncioTestCase):
         with patch('app.router_service.asyncio.sleep', new=AsyncMock()):
             job = await self.perform(identifier)
         self.assertEqual(job['status'], 'no_credit')
-        self.assertEqual(self.requests.count((CHECKIN_PATH, 'POST')), 3)
-        self.assertEqual(self.profiles, 12)
+        self.assertEqual(self.requests.count((CHECKIN_PATH, 'POST')), 6)
+        self.assertEqual(self.profiles, 25)
         self.assertTrue(confirmed_today(self.store.daily_state(self.store.account(identifier)), '42', time.time()))
 
     async def test_non_25_transfer_does_not_skip_real_checkin(self):

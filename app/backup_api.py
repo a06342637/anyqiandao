@@ -42,7 +42,7 @@ def backup_document(store):
                              'validity': row['validity'], 'message': row['message'], 'quota': row['quota'], 'checkin_status': row['checkin_status'],
                              'last_validated': row['last_validated'], 'last_extracted': row['last_extracted'], 'last_checkin': row['last_checkin'],
                              'created': row['created'], 'updated': row['updated'], 'daily_checkin': daily.model_dump() if daily else None,
-                             'checkin_route': json.loads(row['checkin_route'])})
+                             'checkin_route': json.loads(row['checkin_route']), 'position': row['position'], 'provider_position': row['provider_position']})
         usernames = {row['id']: account['username'] for row, account in zip(read('SELECT id FROM accounts ORDER BY position,created,rowid'), accounts)}
         providers = {row['id']: account['provider'] for row, account in zip(read('SELECT id FROM accounts ORDER BY position,created,rowid'), accounts)}
         schedules = []
@@ -165,6 +165,9 @@ def backup_router(store, auth):
                                         item.get('checkin_status'), item.get('quota'), item.get('created') or now, now, str(item.get('note') or '')[:500], provider))
                     summary['accounts_added'] += 1
                 ids_by_name[(provider, username)] = account_id
+                for column in ('position', 'provider_position'):
+                    if item.get(column) is not None:
+                        connection.execute(f'UPDATE accounts SET {column}=? WHERE id=?', (item[column], account_id))
                 if item.get('checkin_route') is not None:
                     account_routes.append((account_id, item['checkin_route']))
                 current = connection.execute('SELECT * FROM accounts WHERE id=?', (account_id,)).fetchone()

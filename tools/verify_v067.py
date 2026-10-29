@@ -2,6 +2,7 @@
 import sys
 import time
 import unittest
+from unittest.mock import AsyncMock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -11,7 +12,9 @@ from tools.verify_v3 import ApiTests, account
 
 
 class WebsiteEligibilityTests(unittest.IsolatedAsyncioTestCase):
-    asyncSetUp = ApiTests.asyncSetUp
+    async def asyncSetUp(self):
+        await ApiTests.asyncSetUp(self)
+        self.service.validate = AsyncMock(return_value={'quota': 100, 'profile': {'used_quota': 0}})
     asyncTearDown = ApiTests.asyncTearDown
     perform = ApiTests.perform
 
@@ -58,7 +61,7 @@ class WebsiteEligibilityTests(unittest.IsolatedAsyncioTestCase):
             await self.engine.process(self.engine.claim())
             self.assertEqual(self.store.one('SELECT status FROM jobs WHERE id=?', (jid,))['status'], 'no_credit')
             self.assertFalse(submitted_today(self.store.daily_state(self.store.account(identifier)), '42', time.time()))
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 4)
 
     async def test_legacy_completed_success_marker_does_not_block_next_task(self):
         identifier = account(self.store)

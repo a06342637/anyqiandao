@@ -128,6 +128,7 @@ class AccountEdit(StrictModel):
 
 class Reorder(StrictModel):
     ids: list[str] = Field(min_length=1, max_length=500)
+    provider: Provider | None = None
 
 
 class ProxyImport(StrictModel):

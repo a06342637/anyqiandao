@@ -14,6 +14,8 @@ Username = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1,
 
 class BackupAccount(BaseModel):
     provider: Provider = 'anyrouter'
+    position: int | None = Field(default=None, ge=0, le=9223372036854775807)
+    provider_position: int | None = Field(default=None, ge=0, le=9223372036854775807)
     username: Username
     password: str | None = Field(default=None, min_length=1, max_length=4096)
     note: str = Field(default='', max_length=500)
